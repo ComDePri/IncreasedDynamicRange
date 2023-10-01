@@ -5,403 +5,42 @@ import plotting as pl
 from scipy.optimize import curve_fit
 import scipy.stats as st
 import scipy.stats
-import utils
+import idr_utils as utils
 from tqdm import tqdm
 import pandas as pd
 from tabulate import tabulate
+from matplotlib.gridspec import GridSpec
+from belief_updating_sim import simulate_signal_change_tracking_update
+from binocular_rivalry import simulate_binocular_rivalry
+from encoding_capacity_sim import simulate_encoding_capacity
+from population_response_sim import simulate_population_response
+from separatrix_sim import simulate_separatrix
+from signal_differences_sim import simulate_signal_differences
+from variance_over_signal_range_sim import variance_simulation
+from data_fitting import TappingData
 
 utils.reload(c)
 utils.reload(pl)
 import itertools as it
 
+plt.style.use('comdepri.mplstyle')
 # %% Logistic func simulations - main simulations with logistic function instead of Hill function
-print("Other sigmoid:")
+print("=====================================\n"
+      "========= Logistic function ========\n"
+      "=====================================")
+simulate_signal_differences(si=True)  # Sensitivity to signal differences
 
+variance_simulation(si=True)  # Variance over signal range - E/I VS IDR
 
-def simulate_signal_differences():
-    print("======================================\n"
-          "========= Signal differences ========\n"
-          "======================================")
-    np.random.seed(c.SEED)
-    s = np.linspace(0, 1, c.SSD_NUM_S_LEVELS)
-    nt_resp = utils.logistic_func(s, c.SI_SSD_NT_N, c.SI_SSD_THRESH)
-    asd_resp = utils.logistic_func(s, c.SI_SSD_ASD_N, c.SI_SSD_THRESH)
+simulate_signal_change_tracking_update(si=True)  # Slower responses to sharp transitions using kalman filter
 
-    signal_sensitivity_fig = pl.plot_sensitivity_to_signal_differences(s, nt_resp, asd_resp, si=True)
-    pl.savefig(signal_sensitivity_fig, "logistic_func/sensitivity to signal differences",
-               ignore=signal_sensitivity_fig.get_axes(), tight=False, si=True)
+simulate_binocular_rivalry(si=True)  # binocluar rivalry - noisy signal around 0.5
 
+simulate_encoding_capacity(si=True)  # FI based encoding capacity
 
-def variance_simulation():
-    print("======================================\n"
-          "========= Variance Simulation ========\n"
-          "======================================")
-    np.random.seed(c.SEED)
-    print("generating signal...")
-    signal = np.repeat(np.linspace(0, 1, c.NV_NUM_S), c.NV_REPEATS * c.NV_NUM_NEURONS * c.NV_PR_REPEATS).reshape(
-        (c.NV_NUM_S, c.NV_NUM_NEURONS, c.NV_REPEATS, c.NV_PR_REPEATS)).astype(np.float32)
-    noisy_signal = signal + np.random.uniform(-c.NV_SIGNAL_SD, c.NV_SIGNAL_SD,
-                                              size=(
-                                                  c.NV_NUM_S, c.NV_NUM_NEURONS, c.NV_REPEATS, c.NV_PR_REPEATS)).astype(
-        np.float32)
-    noisy_signal[noisy_signal < 0] = 0
-    noisy_signal[noisy_signal > 1] = 1
-    print("generating populations...")
-    nt_km = c.SI_NV_THRESH + c.NV_NT_KM_SD * np.random.uniform(-1, 1,
-                                                               size=(1, c.NV_NUM_NEURONS, 1, c.NV_PR_REPEATS)).astype(
-        np.float32)
-    asd_km = c.SI_NV_THRESH + c.NV_ASD_KM_SD * np.random.uniform(-1, 1,
-                                                                 size=(1, c.NV_NUM_NEURONS, 1, c.NV_PR_REPEATS)).astype(
-        np.float32)
-    print("calculating gain...")
-    nt_gain = utils.logistic_func(noisy_signal, c.SI_NV_N, nt_km).astype(np.float32)
-    ei_gain = utils.ei_logistic_func(noisy_signal, c.SI_NV_N, nt_km, c.SI_NV_NU).astype(np.float32)
-    asd_gain = utils.logistic_func(noisy_signal, c.SI_NV_N, asd_km).astype(np.float32)
-    del nt_km, asd_km, noisy_signal
-    print("calculating variance...")
-    nt_variance = nt_gain.mean(1).var(1).astype(np.float32)
-    del nt_gain
-    asd_variance = asd_gain.mean(1).var(1).astype(np.float32)
-    del asd_gain
-    ei_variance = ei_gain.mean(1).var(1).astype(np.float32)
-    del ei_gain
-    # calculate CI of .5 and 1/e from max variance
-    n_boot = 10000
-    boot_population_choice = np.random.choice(np.arange(100), size=(n_boot, nt_variance.shape[-1]))
-    width_boot_dist = np.zeros((n_boot, 2, 3)).astype(np.float32)  # shape (bootstrap, threshold, model)
-    s = np.linspace(0, 1, c.NV_NUM_S)
-    print("calculating CI using bootstrap...")
-    for k, pop_choice in enumerate(boot_population_choice):
-        boot_asd_var = asd_variance[:, pop_choice].mean(1)
-        boot_ei_var = ei_variance[:, pop_choice].mean(1)
-        boot_nt_var = nt_variance[:, pop_choice].mean(1)
-        width_boot_dist[k] = utils.get_width_of_var(boot_asd_var, boot_ei_var, boot_nt_var, s)
-    width_ci_low = np.percentile(width_boot_dist, 1, axis=0)
-    width_ci_high = np.percentile(width_boot_dist, 99, axis=0)
-    widths = utils.get_width_of_var(asd_variance.mean(1), ei_variance.mean(1), nt_variance.mean(1), s)
-    print(
-        f"ASD variance width (max/2): {widths[0][0]:.4g}, 99% CI: [{width_ci_low[0][0]:.4g}, {width_ci_high[0][0]:.4g}]\n"
-        f"E\I variance width (max/2): {widths[0][1]:.4g}, 99% CI: [{width_ci_low[0][1]:.4g}, {width_ci_high[0][1]:.4g}]\n"
-        f"NT variance width (max/2): {widths[0][2]:.4g}, 99% CI: [{width_ci_low[0][2]:.4g}, {width_ci_high[0][2]:.4g}]\n"
-        f"ASD variance width (max/e): {widths[1][0]:.4g}, 99% CI: [{width_ci_low[1][0]:.4g}, {width_ci_high[1][0]:.4g}]\n"
-        f"E\I variance width (max/e): {widths[1][1]:.4g}, 99% CI: [{width_ci_low[1][1]:.4g}, {width_ci_high[1][1]:.4g}]\n"
-        f"NT variance width (max/e): {widths[1][2]:.4g}, 99% CI: [{width_ci_low[1][2]:.4g}, {width_ci_high[1][2]:.4g}]\n")
-    var_fig = pl.plot_variance_over_signal_range(signal[:, 0, 0, :], nt_variance, asd_variance, ei_variance)
-    pl.savefig(var_fig, "logistic_func/variance over signal range", si=True, tight=False, ignore=var_fig.get_axes())
+simulate_population_response(si=True)  # Population response
 
-
-def simulate_signal_change_tracking_update():
-    print("=========================================\n"
-          "==== Kalman filter update simulation ====\n"
-          "=========================================")
-
-    np.random.seed(c.SEED)
-    print("generating signal...")
-    # create noisy signal
-    signal = np.zeros((c.SR_NUM_REPS, c.SR_NUM_STEPS, c.SR_N_NEURONS))
-    change_timepoint = round(max(c.SR_NUM_STEPS * c.SR_MIN_SIG_PERCENTAGE, c.SR_MIN_SIG_TIMEPOINT))
-    signal[:, :change_timepoint, :] = c.SR_SIG_MIN
-    signal[:, change_timepoint:, :] = c.SR_SIG_MAX
-
-    signal += np.random.normal(scale=c.SR_SIG_SIGMA, size=signal.shape)
-    signal[signal < 0] = 0
-    signal[signal > 1] = 1
-    print("generating neuronal populations...")
-    # create km of ASD and NT, same across repeats
-    asd_km = 0.5 + c.SR_ASD_SIGMA_KM * np.random.uniform(-1, 1, size=(c.SR_NUM_REPS, 1, c.SR_N_NEURONS))
-    nt_km = 0.5 + c.SR_NT_SIGMA_KM * np.random.uniform(-1, 1, size=(c.SR_NUM_REPS, 1, c.SR_N_NEURONS))
-
-    dense_sig = np.linspace(0, 1, 10000)
-    asd_dense_resp = np.squeeze(utils.logistic_func(dense_sig[None, :, None], c.SI_SR_N, asd_km).mean(-1))
-    nt_dense_resp = np.squeeze(utils.logistic_func(dense_sig[None, :, None], c.SI_SR_N, nt_km).mean(-1))
-
-    # get responses
-    print("calculating neuronal responses...")
-    asd_resp = utils.logistic_func(signal, c.SI_SR_N, asd_km)
-    nt_resp = utils.logistic_func(signal, c.SI_SR_N, nt_km)
-    # extract variances per step per repeat
-    print("calculating neuronal response variances...")
-    asd_var = asd_resp.var(-1) / c.SR_N_NEURONS
-    nt_var = nt_resp.var(-1) / c.SR_N_NEURONS
-
-    # run Kalman filter on the measured responses
-    # initialize estimates and confidences:
-    print("initializing Kalman filter variables...")
-    asd_estimated_var = np.zeros_like(asd_var, dtype=np.float64)  # shape=(SR_NUM_REPS, SR_NUM_STEPS)
-    asd_estimated_var[:, 0] = 0.25
-    nt_estimated_var = np.zeros_like(nt_var, dtype=np.float64)
-    nt_estimated_var[:, 0] = 0.25
-    asd_resp_estimate = np.zeros_like(asd_var, dtype=np.float64)  # shape=(SR_NUM_REPS, SR_NUM_STEPS)
-    nt_resp_estimate = np.zeros_like(nt_var, dtype=np.float64)
-    asd_resp_estimate[:, 0] = asd_resp.mean(-1)[:, 0]
-    nt_resp_estimate[:, 0] = nt_resp.mean(-1)[:, 0]
-    asd_kg = np.zeros_like(asd_var, dtype=np.float64)
-    nt_kg = np.zeros_like(nt_var, dtype=np.float64)
-    # run kalman filter
-    print("running Kalman filter...")
-    for i in tqdm(range(1, c.SR_NUM_STEPS)):
-        utils.kalman_filter_step(i, asd_kg, asd_estimated_var, asd_var, asd_resp_estimate, asd_resp.mean(-1))
-        utils.kalman_filter_step(i, nt_kg, nt_estimated_var, nt_var, nt_resp_estimate, nt_resp.mean(-1))
-
-    asd_sig_estimate = np.zeros_like(asd_resp_estimate)
-    nt_sig_estimate = np.zeros_like(nt_resp_estimate)
-    for i in tqdm(range(c.SR_NUM_REPS)):
-        asd_sig_estimate[i] = dense_sig[np.searchsorted(asd_dense_resp[i], asd_resp_estimate[i])]
-        nt_sig_estimate[i] = dense_sig[np.searchsorted(nt_dense_resp[i], nt_resp_estimate[i])]
-
-    # plot
-    kalman_fig = pl.plot_kalman_filter(signal, asd_sig_estimate, nt_sig_estimate, text_x=(40, 7), text_y=(150, 300))
-    pl.savefig(kalman_fig, "logistic_func/slower updating in asd", shift_x=-0.06, shift_y=1.03, tight=False,
-               ignore=kalman_fig.get_axes(), si=True)
-    # statistics - time to 0.5/0.9 of the signal change
-    asd_time_to_09_sig = np.argmin(np.abs(asd_sig_estimate[change_timepoint:] - (c.SR_TRACK_PERCENTAGE * c.SR_SIG_MAX)),
-                                   1) - change_timepoint
-    nt_time_to_09_sig = np.argmin(np.abs(nt_sig_estimate[change_timepoint:] - (c.SR_TRACK_PERCENTAGE * c.SR_SIG_MAX)),
-                                  1) - change_timepoint
-    print(f"ASD RT, mean: {asd_time_to_09_sig.mean()}, STD: {asd_time_to_09_sig.std()}\n",
-          f"NT RT, mean: {nt_time_to_09_sig.mean()}, STD: {nt_time_to_09_sig.std()}\n")
-    print(
-        f"Wilcoxon signed-rank test for ASD and NT time to 0.9 of signal after change: {scipy.stats.wilcoxon(asd_time_to_09_sig, nt_time_to_09_sig)}")
-    print("Last Km normality test: ")
-
-    # Check normality assumption to use correct statistics.
-    _, nt_normal_p = scipy.stats.shapiro(asd_time_to_09_sig)
-    _, asd_normal_p = scipy.stats.shapiro(nt_time_to_09_sig)
-    print(f"ASD normality: {asd_normal_p}, NT normality: {nt_normal_p}")
-    if nt_normal_p < 0.05 or asd_normal_p < 0.05:
-        print("Can't calculate F-test as normality assumption fails!\n"
-              "Calculating Shift-function & permutation test for variance instead...")
-        shift_fig = pl.plot_shift_func(asd_time_to_09_sig, nt_time_to_09_sig,
-                                       "Reaction time to abrupt change, ASD to NT")
-        pl.savefig(shift_fig, save_name="logistic ASD to NT shift function of reaction time to abrupt change",
-                   ignore=shift_fig.get_axes(), si=True)
-        p, permutation_fig = utils.permutation_test(asd_time_to_09_sig, nt_time_to_09_sig,
-                                                    lambda x, y: x.var() - y.var(), alternative="greater", plot=True,
-                                                    center_dists=True, hist_color=c.EI_COLOR, line_color=c.ASD_COLOR)
-        print(
-            f"Reaction time variance, ASD > NT hypothesis permutation test, diff={asd_time_to_09_sig.var() - nt_time_to_09_sig.var()}, p = {utils.num2print(p)}")
-        pl.savefig(permutation_fig, "logistic Reaction time variance permutation test",
-                   ignore=permutation_fig.get_axes(), si=True)
-    else:
-        var_stat, var_p_val = utils.f_test(asd_time_to_09_sig, nt_time_to_09_sig, "greater")
-        print(f"Variance equality F-test, F: {var_stat:.4g}, p-value: {var_p_val:.4g}")
-
-
-def simulate_binocular_rivalry():
-    print("======================================\n"
-          "==== Binocular rivalry simulation ====\n"
-          "======================================")
-    np.random.seed(c.SEED)
-    print("generating signal...")
-    signal = np.zeros((c.BR_NUM_REPS, c.BR_NUM_STEPS, c.BR_N_NEURONS))
-    noise = np.random.normal(scale=c.BR_SIG_SIGMA, size=(c.BR_NUM_REPS, c.BR_NUM_STEPS, 1))
-    noise[:, 0] += 0.5
-    signal[:, 0, :] = noise[:, 0]
-    # generate random walk in [0, 1]
-    print("generating random walk...")
-    for i in tqdm(range(1, c.BR_NUM_STEPS)):
-        signal[:, i, :] = signal[:, i - 1, :] + noise[:, i]
-        signal[signal[:, i, 0] < 0, i, :] = 0
-        signal[signal[:, i, 0] > 1, i, :] = 1
-
-    print("generating neuronal population...")
-    asd_km = 0.5 + np.random.normal(scale=c.BR_ASD_SIGMA_KM, size=(1, 1, c.BR_N_NEURONS))
-    nt_km = 0.5 + np.random.normal(scale=c.BR_NT_SIGMA_KM, size=(1, 1, c.BR_N_NEURONS))
-
-    # get responses
-    print("calculating population responses...")
-    asd_resp = utils.logistic_func(signal, c.SI_BR_N, asd_km).mean(2)
-    nt_resp = utils.logistic_func(signal, c.SI_BR_N, nt_km).mean(2)
-
-    # stats
-    print("calculating statistics...")
-    asd_transition_count, asd_ratios, asd_mixed_states = utils.get_binocular_rivalry_stats(asd_resp)
-    nt_transition_count, nt_ratios, nt_mixed_states = utils.get_binocular_rivalry_stats(nt_resp)
-    index = ["ASD", "NT"]
-    ratio_df = pd.DataFrame(
-        [{"mean": data.mean(), "std": data.std(),
-          "mean_ci": utils.get_ci(data, np.mean)} for
-         i, data in
-         enumerate([asd_ratios, nt_ratios])], index=index)
-    transition_df = pd.DataFrame(
-        [{"mean": data.mean(), "std": data.std(),
-          "mean_ci": utils.get_ci(data, np.mean)}
-         for i, data in enumerate([asd_transition_count, nt_transition_count])], index=index)
-    # print statistics
-    print("Pure/Mixed state ratio:")
-    print(tabulate(ratio_df, headers='keys', tablefmt='psql'))
-    print("\nTransition count:")
-    print(tabulate(transition_df, headers='keys', tablefmt='psql'))
-
-    # calculate and print significance test
-    ratio_res = st.wilcoxon(asd_ratios, nt_ratios, alternative="less")
-    transition_res = st.wilcoxon(asd_transition_count, nt_transition_count, alternative="less")
-    print(
-        f"Mixed state Wilcoxon signed-rank test, statistic:{utils.num2print(ratio_res[0])}, "
-        f"p-value:{utils.num2print(ratio_res[1])}\n"
-        f"Transition count Wilcoxon signed-rank test, statistic:{utils.num2print(transition_res[0])}, "
-        f"p-value:{utils.num2print(transition_res[1])}\n")
-    # plot
-    binocular_rivalry_fig = pl.plot_binocular_rivalry(asd_transition_count, nt_transition_count, asd_ratios, nt_ratios,
-                                                      asd_resp, nt_resp, signal, 5)
-    pl.savefig(binocular_rivalry_fig, "logistic_func/binocular rivalry", shift_x=-.125, shift_y=1.07, tight=False,
-               si=True)
-
-
-def simulate_hebbian_learning():
-    print("=====================================\n"
-          "==== Hebbian learning simulation ====\n"
-          "=====================================")
-
-    np.random.seed(c.SEED)
-    time = np.arange(0, c.LR_MAX_T + 1, c.LR_DT)
-    # parallel run
-    Km = []
-    for _ in tqdm(range(c.LR_N_TRIALS), desc="Trials"):
-        Km.append(utils.run_learning_trial_logistic())
-    Km = np.array(Km)
-    NT_IDX = 0
-    ASD_IDX = 1
-
-    time_to_90 = np.argmax(Km >= c.LR_THRESHOLD * c.LR_THRESHOLD_PERCENTAGE, axis=1)
-    sharp_lr = time_to_90[..., NT_IDX]
-    gradual_lr = time_to_90[..., ASD_IDX]
-
-    wilcoxon_res = scipy.stats.wilcoxon(sharp_lr, gradual_lr, alternative="greater")
-    print(f"ASD learning rate, {gradual_lr.mean():.5g} \pm Std.={gradual_lr.std():.5g}\n"
-          f"NT learning rate, {sharp_lr.mean():.5g} \pm Std.={sharp_lr.std():.5g}\n"
-          f"Wilcoxon signed-rank test, W({sharp_lr.size - 1})={wilcoxon_res[0]:.5g}, ${utils.num2latex(wilcoxon_res[1])}$")
-    lr_fig, subax = pl.plot_learning_rate_and_accuracy(Km, time, None, asd_hist_text=(0.485, 7),
-                                                       nt_hist_text=(0.495, 20))
-    pl.savefig(lr_fig, "logistic_func/learning rate and accuracy", ignore=[subax], shift_x=-0.1, shift_y=1.05,
-               tight=False, si=True)
-
-    last_km_nt = Km[:, -1, NT_IDX]
-    last_km_asd = Km[:, -1, ASD_IDX]
-    print(f"ASD bias, {0.5 - last_km_asd.mean():.5g} \pm Std.={last_km_asd.std():.5g}\n"
-          f"NT bias, {0.5 - last_km_nt.mean():.5g}$ \pm Std. ={last_km_nt.std():.5g}")
-
-    print("Last Km normality test: ")
-    nt_normal_stat, nt_normal_p = scipy.stats.shapiro(last_km_nt)
-    asd_normal_stat, asd_normal_p = scipy.stats.shapiro(last_km_asd)
-    print(f"ASD normality, W={asd_normal_stat}, p<{utils.num2latex(asd_normal_p)}, "
-          f"NT normality, W={nt_normal_stat}, p<{utils.num2latex(nt_normal_p)},")
-    if nt_normal_p < 0.05 or asd_normal_p < 0.05:
-        print("last-learned threshold, Wilcoxon signed-rank test:",
-              scipy.stats.wilcoxon(0.5 - last_km_nt, 0.5 - last_km_asd, alternative="less"))
-        print("Can't calculate F-test as normality assumption fails!")
-    else:
-        print("last-learned threshold, paired t-test:",
-              scipy.stats.ttest_rel(0.5 - last_km_nt, 0.5 - last_km_asd, alternative="less"))
-        var_stat, var_p_val = utils.f_test(last_km_asd, last_km_nt, "greater")
-        print(f"Variance equality F-test, ASD var: {last_km_asd.var():.4g}, NT var: {last_km_nt.var():.4g}\n"
-              f"F({last_km_asd.size - 1},{last_km_nt.size - 1})={var_stat:.4g}, "
-              f"p<{utils.num2latex(var_p_val)}")
-
-
-def simulate_encoding_capacity():
-    print("======================================\n"
-          "==== Encoding capacity simulation ====\n"
-          "======================================")
-    np.random.seed(c.SEED)
-    s = np.linspace(0, 1, c.FI_NUM_S)
-    fi = []
-    for n in c.SI_FI_N_LIST:
-        fi.append(utils.population_resp_fi_logistic(s, n, c.FI_KM))
-    fig_fi = pl.plot_fi(fi, s, si=True)
-    pl.savefig(fig_fi, "logistic_func/encoding capacity", shift_x=-0.08, shift_y=1.05, tight=False,
-               ignore=fig_fi.get_axes(), si=True)
-
-
-def simulate_population_response():
-    print("========================================\n"
-          "==== Population response simulation ====\n"
-          "========================================")
-    np.random.seed(c.SEED)
-    s = np.linspace(0, 1, c.PR_NUM_S_LEVELS)
-    population_s = np.repeat(s, c.PR_N_NEURONS).reshape((c.PR_N_NEURONS,) + s.shape, order='F')
-    print("Calculating neurons gain functions...")
-    nt_resp = utils.logistic_func(population_s,
-                                  c.SI_PR_SLOPE,
-                                  c.SI_PR_THRESH + c.PR_NT_K_STD * np.random.uniform(-1, 1,
-                                                                                     size=(c.PR_N_NEURONS, 1)))
-    asd_resp = utils.logistic_func(population_s,
-                                   c.SI_PR_SLOPE,
-                                   c.SI_PR_THRESH + c.PR_ASD_K_STD * np.random.uniform(-1, 1, size=(c.PR_N_NEURONS, 1)))
-
-    fig_population_resp = pl.plot_population_response(s, asd_resp, nt_resp)
-    pl.savefig(fig_population_resp, "logistic_func/NT vs ASD population response", shift_x=0, shift_y=1.01, tight=False,
-               si=True)
-
-    effective_n_asd = utils.get_effective_n(asd_resp.mean(0), np.squeeze(s), c.PR_KM)
-    effective_n_nt = utils.get_effective_n(nt_resp.mean(0), np.squeeze(s), c.PR_KM)
-    print("ASD effective n=%.2f, NT effective n =%.2f" % (effective_n_asd, effective_n_nt))
-    asd_min_sig = s[np.argmax(asd_resp.mean(0) >= 0.1)]
-    asd_max_sig = s[np.argmax(asd_resp.mean(0) >= 0.9)]
-    nt_min_sig = s[np.argmax(nt_resp.mean(0) > 0.1)]
-    nt_max_sig = s[np.argmax(nt_resp.mean(0) > 0.9)]
-    print("ASD dynamic range: [%.4f,%.4f]\nNT dynamic range: [%.4f,%.4f],R_ASD: %.2f, R_NT:%.2f" % (
-        asd_min_sig, asd_max_sig, nt_min_sig, nt_max_sig, asd_max_sig / asd_min_sig, nt_max_sig / nt_min_sig))
-
-
-def simulate_separatrix():
-    print("=====================================\n"
-          "======= Separatrix simulation =======\n"
-          "=====================================")
-    np.random.seed(c.SEED)
-
-    MAIN_FIG_SIGNAL_IDX = 0
-    SUPP_FIG_SIGNAL_IDX = 1
-    signal = np.array([0.4, 0.45])
-
-    km_sigma_levels = np.array([0.01, 0.075, 0.175, 0.21])
-    effective_n_list = utils.get_effective_log_n_from_heterogeneity(km_sigma_levels)
-    signal_sigma_levels = np.linspace(0, .25, 41).astype(np.float64)
-    time = np.arange(0, c.SEP_MAX_T, c.SEP_DT)
-
-    param_list = [signal, signal_sigma_levels, km_sigma_levels]
-    print('Generating separatrix...')
-    connectivity_mat = (np.ones((c.SEP_N_NEURONS, c.SEP_N_NEURONS)) / c.SEP_N_NEURONS).astype(np.float64)
-    params = list(it.product(*param_list))
-    results_mat = np.zeros([param.size for param in param_list] + [time.size, c.SEP_N_NEURONS, c.SEP_REPEATS],
-                           dtype=np.float32)
-    for i, tup in enumerate(tqdm(params)):
-        tup_idx = np.unravel_index(i, results_mat.shape[:len(param_list)])
-        results_mat[tup_idx] = utils.separatrics_run_logistic(
-            tup + (connectivity_mat, c.SEP_N_NEURONS, c.SEP_REPEATS))
-
-    # 1 in each timepoint the population is active, then 1 if the population was active at any time in the run
-    activity_patterns = np.isclose(results_mat.mean(4), 1, atol=c.SEP_ACTIVE_TOL).max(axis=3)
-
-    activated_fraction = activity_patterns.mean(axis=-1)  # % repeats activated
-    activated_fraction_ci = utils.get_ci(activity_patterns[MAIN_FIG_SIGNAL_IDX], np.mean, axis=-1)
-    fig, ax = pl.plot_separatrix(signal_sigma_levels, activated_fraction[MAIN_FIG_SIGNAL_IDX], effective_n_list,
-                                 activated_fraction_ci)
-    pl.savefig(fig, "logistic_func/Separatrix", ignore=[ax], tight=False, si=True)
-    activated_fraction_ci = utils.get_ci(activity_patterns[SUPP_FIG_SIGNAL_IDX], np.mean, axis=-1)
-    fig, ax = pl.plot_separatrix(signal_sigma_levels, activated_fraction[SUPP_FIG_SIGNAL_IDX], effective_n_list,
-                                 activated_fraction_ci)
-    pl.savefig(fig, "logistic_func/Separatrix signal level 0.45", ignore=[ax], tight=False, si=True)
-
-
-utils.reload(c)
-utils.reload(pl)
-
-simulate_signal_differences()  # Sensitivity to signal differences
-
-variance_simulation()  # Variance over signal range - E/I VS IDR
-
-simulate_signal_change_tracking_update()  # Slower responses to sharp transitions using kalman filter
-
-simulate_binocular_rivalry()  # binocluar rivalry - noisy signal around 0.5
-
-simulate_hebbian_learning()  # learning rate and accuracy
-
-simulate_encoding_capacity()  # FI based encoding capacity
-
-simulate_population_response()  # Population response
-
-simulate_separatrix()  # separatrix
+simulate_separatrix(si=True)  # separatrix
 
 # %% check the width/R as a function of slope
 signal = np.linspace(0, 1, c.PR_NUM_S_LEVELS)
@@ -428,7 +67,9 @@ nt_km = c.NV_KM + c.NV_NT_KM_SD * np.random.uniform(-1, 1,
 asd_km = c.NV_KM + c.NV_ASD_KM_SD * np.random.uniform(-1, 1,
                                                       size=(1, c.NV_NUM_NEURONS, 1, c.NV_PR_REPEATS // 2)).astype(
     np.float32)
-fig, axes = pl.get_3_axes_with_3rd_centered()
+fig = plt.figure(figsize=pl.get_fig_size(1.2, 2.2))
+gs = GridSpec(2, 4, left=0.08, hspace=0.3, wspace=0.2)
+axes = [fig.add_subplot(gs[0, 0:2]), fig.add_subplot(gs[0, 2:]), fig.add_subplot(gs[1, 1:3])]
 max_var = 0
 sig = signal[:, 0, 0, :]
 # variance simulation and plot with different levels of signal noise
@@ -455,9 +96,6 @@ for i, signal_sd in enumerate(tqdm(signal_sd_list, desc="Signal SD")):
     ax.ticklabel_format(style='sci', scilimits=(0, 0), axis='y')
     if i > 5:
         ax.set_xlabel("Signal level", fontsize=27)
-    if i % 3 == 0:
-        ax.set_ylabel("Variance in population responses", fontsize=27)
-
     ax.set_title(r"$\sigma^2_{signal}=%.2f$" % signal_sd)
     scatt_nt = ax.scatter(sig, nt_variance, s=1, alpha=0.4, c=c.NT_COLOR)
     ax.plot(sig[:, 0], nt_variance.mean(1), alpha=0.8, c=c.NT_COLOR, label="NT")
@@ -465,13 +103,16 @@ for i, signal_sd in enumerate(tqdm(signal_sd_list, desc="Signal SD")):
     ax.plot(sig[:, 0], asd_variance.mean(1), alpha=0.8, c=c.ASD_COLOR, label="ASD")
     scatt_ei = ax.scatter(sig, ei_variance, s=1, alpha=0.4, c=c.EI_COLOR)
     ax.plot(sig[:, 0], ei_variance.mean(1), alpha=0.8, c=c.EI_COLOR, label="E/I")
-    lgnd = ax.legend([scatt_nt, scatt_asd, scatt_ei], ["NT", "ASD", "E/I"], fontsize=30)
+    lgnd = ax.legend([scatt_nt, scatt_asd, scatt_ei], ["NT", "ASD", "E/I"], fontsize=25)
     for handle in lgnd.legendHandles:
         handle.set_sizes([200.0])
     max_var = max(max_var, nt_variance.max(), asd_variance.max(), ei_variance.max())
 for ax in axes:
     ax.set_ylim(0, max_var * 1.1)
-pl.savefig(fig, "Variance pattern with different levels of signal noise", tight=True, si=True,
+
+fig.text(0.02, 0.5, "Variance in population responses", fontsize=27, ha='center', va='center', rotation=90,
+         fontweight='bold')
+pl.savefig(fig, "Variance pattern with different levels of signal noise", tight=False, si=True,
            ignore=np.array(fig.get_axes()).ravel())
 
 # %% Bayesian tracking - effect of slope on time to change
@@ -671,18 +312,87 @@ for i, cutoff in enumerate(perturb_prob_list):
 pl.savefig(kalman_fig, "Effect of perturbation probability and prior variance on tracking", tight=False,
            ignore=ignore_axes, si=True)
 plt.close(kalman_fig)
-# %% calculate LR, bias, bias std as a function of N:
-print("\nCalculating LR, bias and bias Std. as a function of slope...\n")
-time = np.arange(0, c.LR_MAX_T + 1, c.LR_DT)
-n_range = np.linspace(6, 16, 20)
-n_range_km = []
+
+# %%
+inhibitions = np.linspace(0.1, 1, 10)
+mean_rts = []
+std_rts = []
+
+
+def tracking(n, nu, km_sigma):
+    signal = np.zeros((c.SR_NUM_REPS, c.SR_NUM_STEPS, c.SR_N_NEURONS))
+    change_timepoint = round(max(c.SR_NUM_STEPS * c.SR_MIN_SIG_PERCENTAGE, c.SR_MIN_SIG_TIMEPOINT))
+    signal[:, :change_timepoint, :] = c.SR_SIG_MIN
+    signal[:, change_timepoint:, :] = c.SR_SIG_MAX
+    signal += np.random.normal(scale=c.SR_SIG_SIGMA, size=signal.shape)
+    signal[signal < 0] = 0
+    signal[signal > 1] = 1
+    km = 0.5 + km_sigma * np.random.uniform(-1, 1, size=(c.SR_NUM_REPS, 1, c.SR_N_NEURONS))
+    resp = utils.ei_gain_func(signal, n, km, nu)
+    var = resp.var(-1) / c.SR_N_NEURONS
+    estimated_var = np.zeros_like(var, dtype=np.float64)
+    estimated_var[:, 0] = c.SR_PRIOR_VARIANCE
+    resp_estimate = np.zeros_like(var, dtype=np.float64)
+    kg = np.zeros_like(var, dtype=np.float64)
+    resp = resp.mean(-1)
+    for j in range(1, c.SR_NUM_STEPS):
+        utils.kalman_filter_step(j, kg, estimated_var, var, resp_estimate, resp)
+    sig_estimate = np.zeros_like(resp_estimate)
+    dense_sig = np.linspace(0, 1, 10000)
+    dense_resp = np.squeeze(utils.ei_gain_func(dense_sig[None, :, None], n, km, nu).mean(-1))
+    for j in range(c.SR_NUM_REPS):
+        sig_estimate[j] = dense_sig[np.searchsorted(dense_resp[j], resp_estimate[j])]
+    times = np.argmax(np.abs(sig_estimate) >= c.SR_TRACK_PERCENTAGE * c.SR_SIG_MAX, axis=1) - change_timepoint
+    return times
+
+
 np.random.seed(c.SEED)
-for _ in tqdm(range(c.LR_N_TRIALS), desc="Trials"):
-    n_range_km.append(utils.run_learning_trial(n=n_range))
-n_range_km = np.array(n_range_km)
-function_of_n_fig = pl.plot_learning_as_function_of_n(n_range, n_range_km, time)
-pl.savefig(function_of_n_fig, "LR, bias and bias std as function of n", si=True,
-           ignore=function_of_n_fig.get_axes(), tight=True)
+for inhibition in tqdm(inhibitions, desc="Inhibition strength"):
+    ei_times = tracking(c.SR_N, inhibition, c.SR_NT_SIGMA_KM)
+    mean_rts.append(np.mean(ei_times[ei_times > 0]))
+    std_rts.append(np.std(ei_times[ei_times > 0]))
+
+np.random.seed(c.SEED)
+asd_times = tracking(c.SR_N, 1, c.SR_ASD_SIGMA_KM).mean()
+nt_times = tracking(c.SR_N, 1, c.SR_NT_SIGMA_KM).mean()
+# %%
+fig = plt.figure()
+ax: plt.Axes = fig.subplots()
+ax.axhline(nt_times, linestyle='--', color=c.NT_COLOR, label="NT")
+ax.axhline(asd_times, linestyle='--', color=c.ASD_COLOR, label="ASD")
+ax.errorbar(inhibitions, mean_rts, std_rts, marker='o', color=c.EI_COLOR, label="E/I")
+ax.set_xlabel("Inhibition strength")
+ax.set_ylabel("Mean reaction time")
+ax.legend()
+pl.savefig(fig, "Reaction time as a function of inhibition strength", ignore=[ax], si=True)
+plt.close()
+
+# %% effect of encoding on asd/nt/ei fits
+fitting_kwargs = dict(prior_var=0.1, perturb_prob=1e-6, base_n=20, n_neurons=200, perceptual_noise=0.03,
+                      fit_scale_factor=50)
+asd_mean_n = []
+nt_mean_n = []
+ei_mean_n = []
+for encoding_range in tqdm(np.linspace(0.15, 0.4, 11), desc="Encoding range"):
+    asd_data = TappingData("ASD.mat", half_range=encoding_range, **fitting_kwargs)
+    nt_data = TappingData("NT.mat", half_range=encoding_range, **fitting_kwargs)
+    ei_data = TappingData("ASD.mat", half_range=encoding_range, **fitting_kwargs)
+    asd_data.fit_to_group_dynamics()
+    nt_data.fit_to_group_dynamics()
+    ei_data.fit_ei_to_group_dynamics(min_n=np.nanmean(nt_data.fitted_n), nu_range=[0.1, 1.])
+    asd_mean_n.append(np.nanmean(asd_data.fitted_n))
+    nt_mean_n.append(np.nanmean(nt_data.fitted_n))
+    ei_mean_n.append(np.nanmean(ei_data.fitted_n))
+
+fig = plt.figure()
+ax: plt.Axes = fig.subplots()
+ax.plot(np.linspace(0.15, 0.4, 11), asd_mean_n, marker='o', label="ASD", color=c.ASD_COLOR)
+ax.plot(np.linspace(0.15, 0.4, 11), nt_mean_n, marker='o', label="NT", color=c.NT_COLOR)
+ax.plot(np.linspace(0.15, 0.4, 11), ei_mean_n, marker='o', label="E/I", color=c.EI_COLOR)
+ax.set_xlabel("Encoding range")
+ax.set_ylabel("Mean Hill-coefficient")
+ax.legend()
+pl.savefig(fig, "Mean fitted Hill-coefficient as a function of encoding range", ignore=[ax], si=True)
 # %% Binocular rivalry - changing threshold levels
 np.random.seed(c.SEED)
 print("generating signal...")
@@ -713,12 +423,12 @@ asd_ratios = np.zeros((signal.shape[0], low_thresholds.size), dtype=np.float64)
 nt_ratios = asd_ratios.copy()
 # calculate num of transitions and pure state ratio for differing levels of threshold
 for i in range(low_thresholds.size):
-    asd_transition_counts[:, i], asd_ratios[:, i], _ = utils.get_binocular_rivalry_stats(asd_resp,
-                                                                                         low_thresh=low_thresholds[i],
-                                                                                         high_thresh=high_thresholds[i])
-    nt_transition_counts[:, i], nt_ratios[:, i], _ = utils.get_binocular_rivalry_stats(nt_resp,
-                                                                                       low_thresh=low_thresholds[i],
-                                                                                       high_thresh=high_thresholds[i])
+    asd_transition_counts[:, i], asd_ratios[:, i], \
+        _, _ = utils.get_binocular_rivalry_stats(asd_resp, low_thresh=low_thresholds[i],
+                                                 high_thresh=high_thresholds[i])
+    nt_transition_counts[:, i], nt_ratios[:, i], \
+        _, _ = utils.get_binocular_rivalry_stats(nt_resp, low_thresh=low_thresholds[i],
+                                                 high_thresh=high_thresholds[i])
 asd_nan_rows, asd_nan_cols = np.where(np.isinf(asd_ratios))
 nt_nan_rows, nt_nan_cols = np.where(np.isinf(nt_ratios))
 nan_rows = np.unique(np.concatenate([asd_nan_rows, nt_nan_rows]))
@@ -756,7 +466,7 @@ hgf_mat = scio.loadmat('hgf.mat', struct_as_record=False, squeeze_me=True)
 asd_fit = hgf_mat["asd_fit"]
 sim_fit = hgf_mat["sim_fit"]
 alphas = hgf_mat["alphas"]
-omegas = hgf_mat["omegas3"]
+omegas = hgf_mat["omegas"]
 
 
 def tapas_sgm(x, a):
@@ -769,12 +479,13 @@ def plot_param_trajectory(r, ax, title):
     ax.plot(ts, np.concatenate([[tapas_sgm(r.p_prc.mu_0[1], 1)], tapas_sgm(r.traj.mu[:, 1], 1)]),
             color='r', linewidth=4, label=r"$P(x_1=1)$")
     ax.scatter(0, tapas_sgm(r.p_prc.mu_0[1], 1), color="red", s=15)
-    ax.plot(ts[1:np.argmax(r.u == 1)+1], r.u[:np.argmax(r.u == 1)], color=[0, 0.6, 0], label="$u$, Input", linewidth=3,
+    ax.plot(ts[1:np.argmax(r.u == 1) + 1], r.u[:np.argmax(r.u == 1)], color=[0, 0.6, 0], label="$u$, Input",
+            linewidth=3,
             linestyle=":")
-    ax.plot(ts[np.argmax(r.u == 1)+1:], r.u[np.argmax(r.u == 1):], color=[0, 0.6, 0], linewidth=3, linestyle=":")
-    ax.plot(ts[1:np.argmax(r.y == 1)+1], (((r.y - 0.5) * 1.05) + 0.5)[:np.argmax(r.y == 1)], color=[1, 0.7, 0],
+    ax.plot(ts[np.argmax(r.u == 1) + 1:], r.u[np.argmax(r.u == 1):], color=[0, 0.6, 0], linewidth=3, linestyle=":")
+    ax.plot(ts[1:np.argmax(r.y == 1) + 1], (((r.y - 0.5) * 1.05) + 0.5)[:np.argmax(r.y == 1)], color=[1, 0.7, 0],
             label="$y$, Response", linewidth=3, linestyle=":")
-    ax.plot(ts[np.argmax(r.y == 1)+1:], (((r.y - 0.5) * 1.05) + 0.5)[np.argmax(r.y == 1):], color=[1, 0.7, 0],
+    ax.plot(ts[np.argmax(r.y == 1) + 1:], (((r.y - 0.5) * 1.05) + 0.5)[np.argmax(r.y == 1):], color=[1, 0.7, 0],
             linewidth=3, linestyle=":")
     ax.plot(ts[1:], r.traj.wt[:, 0], color='k', linestyle=":", linewidth=3, label="Learning rate")
     ax.legend(loc='upper left', bbox_to_anchor=[0, 0.9, 0.2, 0.1], fontsize=15)
@@ -801,7 +512,7 @@ def plot_boxplots(arr, ax, title, ylabel):
     ax.scatter(np.full_like(arr[:, 0], 1), arr[:, 1], c="none", s=15, edgecolor='k')
     ax.set_title(title, fontsize=25)
     ax.set_ylabel(ylabel, fontsize=25)
-    ax.set_xticklabels(["ASD", "NT"],fontweight='bold')
+    ax.set_xticklabels(["ASD", "NT"], fontweight='bold')
     ax.tick_params(axis='y', which='major', labelsize=17)
     ax.tick_params(axis='y', which='minor', labelsize=17)
 
@@ -812,7 +523,7 @@ axes = np.ravel(axes)
 plot_param_trajectory(sim_fit, axes[0], "Base parameters fit")
 plot_param_trajectory(asd_fit, axes[1], "High PU parameters fit")
 plot_boxplots(alphas, axes[2], "Perceptual uncertainty", r"$\alpha$")
-axes[2].set_ylim([0,axes[2].get_ylim()[1]])
+axes[2].set_ylim([0, axes[2].get_ylim()[1]])
 plot_boxplots(omegas, axes[3], "Volatility estimates", r"$\omega_3$")
 
 pl.savefig(fig, "hgf model", si=True, tight=True, shift_x=-0.15, shift_y=1.05, numbering_size=30)

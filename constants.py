@@ -7,7 +7,7 @@ SEED = 97
 SUBPLOT_SIZE = 8
 NT_COLOR = "#00A08A"
 ASD_COLOR = "#FF0000"
-EI_COLOR = "#5BBCD6"
+EI_COLOR = "#7294D4"
 WHITE = "#FAEBD7"
 HIST_COLOR = "#F2AD00"
 FILL_COLOR = "#F98400"
@@ -28,6 +28,7 @@ AX_LABEL_SIZE = 30
 X_LABELPAD = 10
 Y_LABELPAD = 10
 
+EI_NU = 0.75
 # single neuron response constants
 SN_N = 10
 SN_KI = .5
@@ -44,7 +45,7 @@ PR_NUM_S_LEVELS = 5000
 # neural variability
 NV_NUM_NEURONS = 200
 NV_N = 16
-NU = exp(log(0.75) / NV_N)
+NU = 0.75
 NV_NT_KM_SD = .01
 NV_ASD_KM_SD = .175
 NV_SIGNAL_SD = 0.1
@@ -117,7 +118,9 @@ TAU = 0.2
 SEP_ACTIVE_TOL = 0.2
 
 # FI
+FI_NT_N = 16
 FI_N_LIST = [4, 8, 12, 16, 20]
+FI_NU_LIST = [0.5, 0.6, 0.7, 0.8, 0.9, 1.]
 FI_KM = .5
 FI_NUM_S = 10000
 
@@ -125,32 +128,32 @@ FI_NUM_S = 10000
 # ===================== SI constants ====================
 # =======================================================
 # Population Response
-SI_PR_SLOPE = 40
+SI_PR_SLOPE = 35
 SI_PR_THRESH = 0.5
 
 # Signal Differences
-SI_SSD_NT_N = 40
+SI_SSD_NT_N = 35
 SI_SSD_ASD_N = 15
 SI_SSD_THRESH = 0.5
 
 # Neural Variability
 SI_NV_THRESH = 0.5
-SI_NV_N = 40
+SI_NV_N = 35
 SI_NV_NU = 0.75
 
 # signal tracking
 SI_SR_THRESH = 0.5
-SI_SR_N = 40
+SI_SR_N = 35
 SI_SR_NUM_STEPS = 300
 # Binocular Rivalry
-SI_BR_N = 40
+SI_BR_N = 35
 
 # Hebbian Learning
-SI_LR_NT_N = 40
-SI_LR_ASD_N = 8
+SI_LR_NT_N = 35
+SI_LR_ASD_N = 12
 
 # encoding capacity
 SI_FI_N_LIST = [8., 16., 24., 32., 40.]
 
 # Separatrix
-SI_SEP_N = 40
+SI_SEP_N = 35

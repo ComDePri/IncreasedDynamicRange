@@ -1,12 +1,12 @@
 # %% imports
 import numpy as np
 import constants as c
-import utils
+import idr_utils as utils
 import plotting as pl
 
 
 # %% Population response
-def simulate_population_response():
+def simulate_population_response(si=False):
     print("========================================\n"
           "==== Population response simulation ====\n"
           "========================================")
@@ -14,15 +14,22 @@ def simulate_population_response():
     s = np.linspace(0, 1, c.PR_NUM_S_LEVELS)
     population_s = np.repeat(s, c.PR_N_NEURONS).reshape((c.PR_N_NEURONS,) + s.shape, order='F')
     print("Calculating neurons gain functions...")
-    nt_resp = utils.hill_func(population_s,
-                              c.PR_N,
-                              c.PR_KM + c.PR_NT_K_STD * np.random.uniform(-1, 1, size=(c.PR_N_NEURONS, 1)))
-    asd_resp = utils.hill_func(population_s,
-                               c.PR_N,
-                               c.PR_KM + c.PR_ASD_K_STD * np.random.uniform(-1, 1, size=(c.PR_N_NEURONS, 1)))
 
+    if si:
+        gain_func = utils.logistic_func
+        n = c.SI_PR_SLOPE
+    else:
+        gain_func = utils.hill_func
+        n = c.PR_N
+
+    nt_resp = gain_func(population_s, n, c.PR_KM + c.PR_NT_K_STD * np.random.uniform(-1, 1, size=(c.PR_N_NEURONS, 1)))
+    asd_resp = gain_func(population_s, n, c.PR_KM + c.PR_ASD_K_STD * np.random.uniform(-1, 1, size=(c.PR_N_NEURONS, 1)))
+
+    save_prefix = "logistic_func/" if si else ""
+    print("Plotting population response...")
     fig_population_resp = pl.plot_population_response(s, asd_resp, nt_resp)
-    pl.savefig(fig_population_resp, "NT vs ASD population response", shift_x=0, shift_y=1.01, tight=False)
+    pl.savefig(fig_population_resp, save_prefix + "NT vs ASD population response", shift_x=0, shift_y=1.01, tight=False,
+               si=si)
 
     effective_n_asd = utils.get_effective_n(asd_resp.mean(0), np.squeeze(s), c.PR_KM)
     effective_n_nt = utils.get_effective_n(nt_resp.mean(0), np.squeeze(s), c.PR_KM)
