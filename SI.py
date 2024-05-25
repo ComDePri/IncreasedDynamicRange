@@ -20,7 +20,6 @@ from variance_over_signal_range_sim import variance_simulation, get_variance
 
 utils.reload(c)
 utils.reload(pl)
-# TODO: KDE estimate of nt/asd heterogeneity over the het-n plot
 plt.style.use('comdepri.mplstyle')
 _ = utils.get_effective_n_from_heterogeneity(0.1)
 # %% Logistic func simulations - main simulations with logistic function instead of Hill function
