@@ -1,29 +1,28 @@
-import numpy as np
-import matplotlib.pyplot as plt
 import constants as c
-import plotting as pl
-from scipy.optimize import curve_fit
-import scipy.stats as st
-import scipy.stats
 import idr_utils as utils
-from tqdm import tqdm
-import pandas as pd
-from tabulate import tabulate
-from matplotlib.gridspec import GridSpec
+import lca_simulations
+import matplotlib.pyplot as plt
+import numpy as np
+import plotting as pl
+import scipy.stats
+import scipy.stats as st
 from belief_updating_sim import simulate_signal_change_tracking_update
 from binocular_rivalry import simulate_binocular_rivalry
+from data_fitting import TappingData
 from encoding_capacity_sim import simulate_encoding_capacity
+from matplotlib.gridspec import GridSpec
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from population_response_sim import simulate_population_response
 from separatrix_sim import simulate_separatrix
 from signal_differences_sim import simulate_signal_differences
-from variance_over_signal_range_sim import variance_simulation
-from data_fitting import TappingData
+from tqdm import tqdm
+from variance_over_signal_range_sim import variance_simulation, get_variance
 
 utils.reload(c)
 utils.reload(pl)
-import itertools as it
-
+# TODO: KDE estimate of nt/asd heterogeneity over the het-n plot
 plt.style.use('comdepri.mplstyle')
+_ = utils.get_effective_n_from_heterogeneity(0.1)
 # %% Logistic func simulations - main simulations with logistic function instead of Hill function
 print("=====================================\n"
       "========= Logistic function ========\n"
@@ -42,19 +41,113 @@ simulate_population_response(si=True)  # Population response
 
 simulate_separatrix(si=True)  # separatrix
 
-# %% check the width/R as a function of slope
-signal = np.linspace(0, 1, c.PR_NUM_S_LEVELS)
-slopes = np.linspace(3.2, 20, 50)
-slope_resp = utils.hill_func(signal[:, None], slopes[None, :], c.PR_KM)
-asd_min_sig = signal[np.argmax(slope_resp >= 0.1, axis=0)]
-asd_max_sig = signal[np.argmax(slope_resp >= 0.9, axis=0)]
-widths = asd_max_sig - asd_min_sig
-ratios = asd_max_sig / asd_min_sig
-slopes_fig = pl.plot_dynamic_range_as_function_of_slope(slopes, widths, ratios)
-pl.savefig(slopes_fig, "Dynamic range as a function of slope", ignore=slopes_fig.get_axes(), si=True, tight=True)
+# %% plots different sampling
+pl.plot_effect_of_sampling_on_dynamic_range()
+# %% SNR calculation
+np.random.seed(0)
+asd_n = 7
+nt_n = 16
+asd_total_snr = []
+nt_total_snr = []
+clean_sig = np.arange(0, 1.025, 0.025)
+noise_levels = np.array([0.05, 0.1, 0.2, 0.3, 0.4])
+for signal_noise in tqdm(noise_levels):
+    asd_var, _, nt_var, signal = get_variance(False, signal_noise, clean_sig.size)
+    asd_var = asd_var.mean(-1)
+    nt_var = nt_var.mean(-1)
+    asd_real_diff = utils.hill_func(clean_sig, asd_n, 0.5)
+    nt_real_diff = utils.hill_func(clean_sig, nt_n, 0.5)
+    asd_real_diff = asd_real_diff[1:] - asd_real_diff[:-1]
+    nt_real_diff = nt_real_diff[1:] - nt_real_diff[:-1]
+    asd_snr = asd_real_diff / np.sqrt(asd_var[1:] + asd_var[:1])
+    nt_snr = nt_real_diff / np.sqrt(nt_var[1:] + nt_var[:1])
 
+    asd_total = scipy.integrate.simpson(y=asd_snr, x=clean_sig[1:])
+    nt_total = scipy.integrate.simpson(y=nt_snr, x=clean_sig[1:])
+    plt.figure(figsize=pl.get_fig_size(1, 1.5))
+    plt.plot(clean_sig[1:], nt_snr, label=f"NDR")
+    plt.plot(clean_sig[1:], asd_snr, label=f"IDR")
+    plt.text(0.01, 0.78,
+             f"NDR $\int \Delta/Var(\Delta)$: {nt_total:.3f}\nIDR $\int \Delta/Var(\Delta)$: {asd_total:.2f}",
+             fontsize=12, transform=plt.gca().transAxes)
+    plt.legend()
+    plt.title(f"Discriminability as a function of signal with noise {signal_noise:.3f}")
+    plt.xlabel("Signal level")
+    plt.ylabel(r"Discriminability ($\frac{A(S_n)-A(S_{n-1})}{\sqrt{Var(A(S_n))+Var(A(S_{n-1}))}}$)")
+    pl.savefig(plt.gcf(), f"NDR and IDR SNR as a function of signal with noise {signal_noise:.3f}", tight=False,
+               si=True)
+    pl.close_all()
+    asd_total_snr.append(asd_total)
+    nt_total_snr.append(nt_total)
+
+plt.figure(figsize=pl.get_fig_size(1, 1.3))
+plt.plot(noise_levels, nt_total_snr, label="NDR", marker='o')
+plt.plot(noise_levels, asd_total_snr, label="IDR", marker='o')
+plt.legend()
+plt.xlabel("Signal noise")
+plt.ylabel(r"Total discriminability")
+pl.savefig(plt.gcf(), "Total discriminability as a function of signal noise", tight=False, si=True)
+# %%
+np.random.seed(0)
+nt_n = 16
+asd_sd = 0.175
+nt_sd = 0.01
+N_REPS = 1000
+N_NEURONS = 200
+clean_sig = np.arange(0, 1.025, 0.025)
+noise_levels = np.array([0.05, 0.1, 0.3, 0.4])
+noise_level = 0.05
+np.random.seed(c.SEED)
+noisy_sig = clean_sig[:, None, None] + np.random.normal(0, noise_level, size=(clean_sig.shape + (N_REPS, N_NEURONS)))
+asd_resp = utils.hill_func(noisy_sig, nt_n, 0.5 + np.random.uniform(-asd_sd, asd_sd, size=(1, N_REPS, N_NEURONS)))
+nt_resp = utils.hill_func(noisy_sig, nt_n, 0.5 + np.random.uniform(-nt_sd, nt_sd, size=(1, N_REPS, N_NEURONS)))
+asd_pop_diff = np.diff(asd_resp.mean(-1), axis=0)
+nt_pop_diff = np.diff(nt_resp.mean(-1), axis=0)
+asd_ci = np.percentile(asd_pop_diff, [25, 75], axis=-1)
+nt_ci = np.percentile(nt_pop_diff, [25, 75], axis=-1)
+fig = pl.shaded_errplot(clean_sig[1:], asd_pop_diff.mean(-1), asd_ci, plot_kwargs=dict(label="IDR", color=c.ASD_COLOR))
+pl.shaded_errplot(clean_sig[1:], nt_pop_diff.mean(-1), nt_ci, plot_kwargs=dict(label="NDR", color=c.NT_COLOR),
+                  ax=fig.get_axes()[0])
+fig.get_axes()[0].set(xlabel="Signal level", ylabel="Population response difference",
+                      title="Population response difference")
+pl.savefig(fig, "Population response difference as a function of signal with noise", tight=False, si=True)
+pl.close_all()
+# %% combine power analysis
+for ns in [(11, 9), (12, 8), (12, 10), (13, 7), (13, 9), (14, 6), (14, 8), (15, 7), (16, 8)]:
+    data, individual_ns = utils.load_power_analysis_data(ns[0], ns[1])
+    population, powers, heterogeneities = utils.parse_power_analysis_data(data, individual_ns)
+    ax = pl.plot_combined_power_analysis(heterogeneities, ns[0], ns[1], population, powers)
+    pl.savefig(ax.get_figure(), f"Combined power analysis for NDR={ns[0]} and IDR={ns[1]}", tight=False, si=True)
+pl.close_all()
+
+
+# %% power analysis for dynamic range
+def get_width_and_ratio(signal, slope_resp):
+    min_sig = signal[np.argmax(slope_resp >= 0.1 * slope_resp.max(0), axis=0)]
+    max_sig = signal[np.argmax(slope_resp >= 0.9 * slope_resp.max(0), axis=0)]
+    widths = max_sig - min_sig
+    ratios = max_sig / min_sig
+    return widths, ratios
+
+
+# %% effect size analysis for dynamic range
+signal = np.linspace(0, 1, c.PR_NUM_S_LEVELS)
+slopes = np.linspace(3.2, 16, 50)
+if utils.HETEROGENEITY_TO_N_STD is None:
+    _ = utils.get_effective_n_from_heterogeneity(0.01)
+slopes_std = utils.HETEROGENEITY_TO_N_STD[1][::-1][np.searchsorted(utils.HETEROGENEITY_TO_N[1][::-1], slopes)]
+slope_resp = utils.hill_func(signal[:, None], slopes[None, :], c.PR_KM)
+slope_resp_low_std = utils.hill_func(signal[:, None], slopes[None, :] - slopes_std[None, :], c.PR_KM)
+slope_resp_high_std = utils.hill_func(signal[:, None], slopes[None, :] + slopes_std[None, :], c.PR_KM)
+widths, ratios = get_width_and_ratio(signal, slope_resp)
+low_std_widths, low_std_ratios = get_width_and_ratio(signal, slope_resp_low_std)
+high_std_widths, high_std_ratios = get_width_and_ratio(signal, slope_resp_high_std)
+slopes_fig = pl.plot_dynamic_range_as_function_of_slope(slopes, [widths, low_std_widths, high_std_widths],
+                                                        [ratios, low_std_ratios, high_std_ratios])
+pl.savefig(slopes_fig, "Dynamic range as a function of slope", numbering_size=25, si=True, tight=True, shift_y=1.05)
+pl.close_all()
 # %% neural variability - test the effect of different levels of signal noise on variance pattern
-signal_sd_list = np.round([0.07, 0.19, 0.32], 4)  # levels of signal noise
+signal_sd_list = np.round([0.07, 0.13, 0.19], 4)  # levels of signal noise
 np.random.seed(c.SEED)
 print("generating signal...")
 signal = np.repeat(np.linspace(0, 1, c.NV_NUM_S),
@@ -98,12 +191,12 @@ for i, signal_sd in enumerate(tqdm(signal_sd_list, desc="Signal SD")):
         ax.set_xlabel("Signal level", fontsize=27)
     ax.set_title(r"$\sigma^2_{signal}=%.2f$" % signal_sd)
     scatt_nt = ax.scatter(sig, nt_variance, s=1, alpha=0.4, c=c.NT_COLOR)
-    ax.plot(sig[:, 0], nt_variance.mean(1), alpha=0.8, c=c.NT_COLOR, label="NT")
+    ax.plot(sig[:, 0], nt_variance.mean(1), alpha=0.8, c=c.NT_COLOR, label="NDR")
     scatt_asd = ax.scatter(sig, asd_variance, s=1, alpha=0.4, c=c.ASD_COLOR)
-    ax.plot(sig[:, 0], asd_variance.mean(1), alpha=0.8, c=c.ASD_COLOR, label="ASD")
+    ax.plot(sig[:, 0], asd_variance.mean(1), alpha=0.8, c=c.ASD_COLOR, label="IDR")
     scatt_ei = ax.scatter(sig, ei_variance, s=1, alpha=0.4, c=c.EI_COLOR)
     ax.plot(sig[:, 0], ei_variance.mean(1), alpha=0.8, c=c.EI_COLOR, label="E/I")
-    lgnd = ax.legend([scatt_nt, scatt_asd, scatt_ei], ["NT", "ASD", "E/I"], fontsize=25)
+    lgnd = ax.legend([scatt_nt, scatt_asd, scatt_ei], ["NDR", "IDR", "E/I"], fontsize=25)
     for handle in lgnd.legendHandles:
         handle.set_sizes([200.0])
     max_var = max(max_var, nt_variance.max(), asd_variance.max(), ei_variance.max())
@@ -126,9 +219,9 @@ signal[signal < 0] = 0
 signal[signal > 1] = 1
 
 noise_levels = np.linspace(0.01, 0.21, 20)  # correspond to N of 2.5 to 100% of N
-time_to_09_sig = np.zeros_like(noise_levels).astype(np.float32)
-effective_ns = np.zeros_like(noise_levels).astype(np.float32)
-n_reps = 1
+n_reps = 10
+time_to_09_sig = np.zeros((noise_levels.size, n_reps)).astype(np.float32)
+effective_ns = np.zeros((noise_levels.size, n_reps)).astype(np.float32)
 for i, noise in enumerate(tqdm(noise_levels, desc="Noise levels")):
     for k in range(n_reps):
         np.random.seed(c.SEED)
@@ -136,7 +229,7 @@ for i, noise in enumerate(tqdm(noise_levels, desc="Noise levels")):
         effective_n_sig = np.linspace(0.2, 0.8, 150)
         km = 0.5 + noise * np.random.uniform(-1, 1, size=(1, 1, c.SR_N_NEURONS))
         effective_n_population_resp = utils.hill_func(effective_n_sig[:, None], c.SR_N, np.squeeze(km)[None, :])
-        effective_ns[i] += utils.get_effective_n(effective_n_population_resp.mean(1), effective_n_sig, 0.5)
+        effective_ns[i, k] = utils.get_effective_n(effective_n_population_resp.mean(1), effective_n_sig, 0.5)
         resp = utils.hill_func(signal, c.SR_N, km)
         pop_resp = resp.mean(-1)
         var = resp.var(-1) / c.SR_N_NEURONS
@@ -149,9 +242,7 @@ for i, noise in enumerate(tqdm(noise_levels, desc="Noise levels")):
             utils.kalman_filter_step(j, kg, estimated_var, var, sig_estimate, pop_resp)
         tmp = (np.argmin(np.abs(sig_estimate[change_timepoint:] - (c.SR_TRACK_PERCENTAGE * c.SR_SIG_MAX)),
                          1) - change_timepoint) + 1
-        time_to_09_sig[i] += np.mean(tmp[tmp > 0])
-    effective_ns[i] /= n_reps
-    time_to_09_sig[i] /= n_reps
+        time_to_09_sig[i, k] = np.mean(tmp[tmp > 0])
 time_to_track_fig = pl.plot_time_to_track_as_a_function_of_n(time_to_09_sig, effective_ns)
 pl.savefig(time_to_track_fig, "Time to track signal change as a function of N", ignore=time_to_track_fig.get_axes(),
            si=True)
@@ -192,8 +283,8 @@ def si_plot_kalman_filter(axs, signal, asd_sig_estimate, nt_sig_estimate, text_x
         else:
             return np.linspace(array.min() * 0.9, array.max() * 1.1, 100)
 
-    axs.plot(asd_sig_estimate[c.SR_PLOT_REP_IDX, :], label="ASD", color=c.ASD_COLOR, linewidth=3)
-    axs.plot(nt_sig_estimate[c.SR_PLOT_REP_IDX, :], label="NT", color=c.NT_COLOR, linewidth=2, alpha=0.7)
+    axs.plot(asd_sig_estimate[c.SR_PLOT_REP_IDX, :], label="IDR", color=c.ASD_COLOR, linewidth=3)
+    axs.plot(nt_sig_estimate[c.SR_PLOT_REP_IDX, :], label="NDR", color=c.NT_COLOR, linewidth=2, alpha=0.7)
     axs.plot(signal[c.SR_PLOT_REP_IDX, :, 0], color='gray', label="measured signal", alpha=0.3)
     axs.plot([c.SR_SIG_MIN] * change_timepoint +
              [c.SR_SIG_MAX] * (c.SI_SR_NUM_STEPS - change_timepoint), color='k',
@@ -201,10 +292,10 @@ def si_plot_kalman_filter(axs, signal, asd_sig_estimate, nt_sig_estimate, text_x
 
     subax = pl.inset_axes(axs, "50%", "50%", loc="lower right", borderpad=3, bbox_transform=axs.transAxes,
                           bbox_to_anchor=(0.05, 0.05, 1, 1))  # type: plt.Axes
-    subax.hist(asd_times, bins=get_bins(asd_times, 50), label="ASD", density=True)
-    subax.hist(nt_times, bins=get_bins(nt_times, 50), label="NT", density=True)
-    subax.text(text_x[0], text_y[0], "ASD", color=c.ASD_COLOR, size=25, weight="bold")
-    subax.text(text_x[1], text_y[1], "NT", color=c.NT_COLOR, size=25, weight="bold")
+    subax.hist(asd_times, bins=get_bins(asd_times, 50), label="IDR", density=True, color=c.ASD_COLOR)
+    subax.hist(nt_times, bins=get_bins(nt_times, 50), label="NDR", density=True, color=c.NT_COLOR)
+    subax.text(text_x[1], text_y[1], "IDR", color=c.ASD_COLOR, size=25, weight="bold")
+    subax.text(text_x[0], text_y[0], "NDR", color=c.NT_COLOR, size=25, weight="bold")
 
     subax.set(xlabel="Time after switch (steps)", ylabel="Frequency")
     subax.xaxis.set_label_text("Time after switch (steps)", fontsize=20)
@@ -287,13 +378,13 @@ for i, cutoff in enumerate(perturb_prob_list):
     nt_sig_estimates.append(nt_sig_estimate)
 # %%
 text_x_list = [
-    [15, 3.3], [35, 3.3],
-    [75, 7], [190, 15]
+    [3.3, 15], [3.3, 35],
+    [7, 75], [15, 190]
 ]
 # ASD,NT
 text_y_list = [
-    [0.4, 0.75], [0.25, 0.75],
-    [0.2, 0.6], [0.2, 0.6]
+    [0.75, 0.4], [0.75, 0.25],
+    [0.6, 0.2], [0.6, 0.2]
 ]
 kalman_fig = plt.figure(figsize=(pl.get_fig_size(2.5, 2.5)))
 axes = kalman_fig.subplots(2, 2, sharex="all", sharey="all").ravel()
@@ -358,8 +449,8 @@ nt_times = tracking(c.SR_N, 1, c.SR_NT_SIGMA_KM).mean()
 # %%
 fig = plt.figure()
 ax: plt.Axes = fig.subplots()
-ax.axhline(nt_times, linestyle='--', color=c.NT_COLOR, label="NT")
-ax.axhline(asd_times, linestyle='--', color=c.ASD_COLOR, label="ASD")
+ax.axhline(nt_times, linestyle='--', color=c.NT_COLOR, label="NDR")
+ax.axhline(asd_times, linestyle='--', color=c.ASD_COLOR, label="IDR")
 ax.errorbar(inhibitions, mean_rts, std_rts, marker='o', color=c.EI_COLOR, label="E/I")
 ax.set_xlabel("Inhibition strength")
 ax.set_ylabel("Mean reaction time")
@@ -373,7 +464,8 @@ fitting_kwargs = dict(prior_var=0.1, perturb_prob=1e-6, base_n=20, n_neurons=200
 asd_mean_n = []
 nt_mean_n = []
 ei_mean_n = []
-for encoding_range in tqdm(np.linspace(0.15, 0.4, 11), desc="Encoding range"):
+encoding_range_space = np.linspace(0.2, 0.35, 7)
+for encoding_range in tqdm(encoding_range_space, desc="Encoding range"):
     asd_data = TappingData("ASD.mat", half_range=encoding_range, **fitting_kwargs)
     nt_data = TappingData("NT.mat", half_range=encoding_range, **fitting_kwargs)
     ei_data = TappingData("ASD.mat", half_range=encoding_range, **fitting_kwargs)
@@ -386,9 +478,9 @@ for encoding_range in tqdm(np.linspace(0.15, 0.4, 11), desc="Encoding range"):
 
 fig = plt.figure()
 ax: plt.Axes = fig.subplots()
-ax.plot(np.linspace(0.15, 0.4, 11), asd_mean_n, marker='o', label="ASD", color=c.ASD_COLOR)
-ax.plot(np.linspace(0.15, 0.4, 11), nt_mean_n, marker='o', label="NT", color=c.NT_COLOR)
-ax.plot(np.linspace(0.15, 0.4, 11), ei_mean_n, marker='o', label="E/I", color=c.EI_COLOR)
+ax.plot(encoding_range_space, asd_mean_n, marker='o', label="IDR", color=c.ASD_COLOR)
+ax.plot(encoding_range_space, nt_mean_n, marker='o', label="NDR", color=c.NT_COLOR)
+ax.plot(encoding_range_space, ei_mean_n, marker='o', label="E/I", color=c.EI_COLOR)
 ax.set_xlabel("Encoding range")
 ax.set_ylabel("Mean Hill-coefficient")
 ax.legend()
@@ -440,7 +532,7 @@ if nan_rows.size > 0:
 
 pl.plot_boxplots(boxplot_value_list=[nt_ratios, asd_ratios],
                  x_labels=np.round(low_thresholds, 2),
-                 group_labels=["NT", "ASD"],
+                 group_labels=["NDR", "IDR"],
                  title="pure-mixed ratio over threshold",
                  xlabel="Pure state threshold", ylabel="Ratio $\\frac{Pure_t}{Mixed_t}$",
                  colors=[c.NT_COLOR, c.ASD_COLOR],
@@ -450,80 +542,153 @@ pl.plot_boxplots(boxplot_value_list=[nt_ratios, asd_ratios],
 if utils.HETEROGENEITY_TO_N is None:
     _ = utils.get_effective_n_from_heterogeneity(0.1)
 noise_level_list, retrieved_n = utils.HETEROGENEITY_TO_N
+_, retrieved_n_std = utils.HETEROGENEITY_TO_N_STD
 # plot
 fig = plt.figure(figsize=pl.get_fig_size(1, 1.7))
 ax: plt.Axes = fig.subplots()
 ax.plot(noise_level_list, retrieved_n, color=c.ASD_COLOR)
+ax.fill_between(noise_level_list, retrieved_n - retrieved_n_std, retrieved_n + retrieved_n_std, color=c.ASD_COLOR,
+                alpha=0.3)
 pl.set_ax_labels(ax, "Increased heterogeneity in half activation point\nreduces slope (n) of population response",
-                 "Heterogeneity level", "n")
-pl.savefig(fig, "effect of noise on population slope", si=True, shift_x=-0.09, shift_y=1.05)
+                 "Heterogeneity level", "Hill coefficient (n)")
+subax = inset_axes(ax, "40%", "30%", loc="upper right", borderpad=2)
+n_deriv = np.gradient(retrieved_n, noise_level_list[1] - noise_level_list[0])
+box = np.ones(20) / 20
+y_smooth = np.convolve(n_deriv, box, mode='same')
+subax.plot(noise_level_list, y_smooth, color=c.ASD_COLOR)
+subax.set(xlabel="Heterogeneity level", ylabel=r"$\frac{dn}{d\sigma}$")
+pl.savefig(fig, "effect of noise on population slope", ignore=fig.get_axes(), si=True, shift_x=-0.09, shift_y=1.05)
 plt.close(fig)
 
-# %% HGF
-import scipy.io as scio
+# %% generate encoding figure
+x = np.linspace(0, 1, 1000)
+resp1 = utils.ei_gain_func(x, 16, 0.5)
+resp2 = utils.ei_gain_func(x, 4, 0.5)
+fig, ax = plt.subplots(figsize=pl.get_fig_size(1, 1))
+ax.plot(x, resp1, color=c.NT_COLOR, linewidth=15)
+ax.plot(x, resp2, color=c.ASD_COLOR, linewidth=15)
+ax.set_ylabel("$f(I)$", fontsize=60)
+ax.set_xlabel("$I$", fontsize=60)
+fig.savefig("data/Encoding figure.pdf")
+pl.close_all()
+# %% divisive normalization and IDR
+s1 = np.linspace(0, 1, 1001)
+s2 = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.55, 0.6, 0.65, 1])
 
-hgf_mat = scio.loadmat('hgf.mat', struct_as_record=False, squeeze_me=True)
-asd_fit = hgf_mat["asd_fit"]
-sim_fit = hgf_mat["sim_fit"]
-alphas = hgf_mat["alphas"]
-omegas = hgf_mat["omegas"]
+ndr_resp1 = utils.hill_func(s1, 16, 0.5)
+ndr_resp2 = utils.hill_func(s2, 16, 0.5)
+idr_resp1 = utils.hill_func(s1, 8, 0.5)
+idr_resp2 = utils.hill_func(s2, 8, 0.5)
 
+ndr_div_norm = ndr_resp1[:, None] / (ndr_resp1[:, None] + ndr_resp2[None, :])
+idr_div_norm = idr_resp1[:, None] / (idr_resp1[:, None] + idr_resp2[None, :])
 
-def tapas_sgm(x, a):
-    return a / (1 + np.exp(-x))
+fig, ax = plt.subplots(1, 1, figsize=pl.get_fig_size(0.7, 1))
+ax.plot(s1, ndr_div_norm)  # , label=[f"NDR /{s:.1f}" for s in s2])
+ax.set_prop_cycle(None)
+ax.plot(s1, idr_div_norm, linestyle=":", alpha=0.7)  # , label=[f"IDR /{s:.1f}" for s in s2]
+ax.set_prop_cycle(None)
+ax.set_xticks(s2, [f"{s:.2g}" for s in s2], fontsize=10)
 
+ax.set_title("IDR and divisive normalization", fontsize=18)
+pl.savefig(fig, "Divisive normalization and IDR", si=True, numbering_size=30, shift_x=-0.1, shift_y=1.05)
+pl.close_all()
 
-def plot_param_trajectory(r, ax, title):
-    t = np.ones_like(r.u)
-    ts = np.concatenate([[0], np.cumsum(t)])
-    ax.plot(ts, np.concatenate([[tapas_sgm(r.p_prc.mu_0[1], 1)], tapas_sgm(r.traj.mu[:, 1], 1)]),
-            color='r', linewidth=4, label=r"$P(x_1=1)$")
-    ax.scatter(0, tapas_sgm(r.p_prc.mu_0[1], 1), color="red", s=15)
-    ax.plot(ts[1:np.argmax(r.u == 1) + 1], r.u[:np.argmax(r.u == 1)], color=[0, 0.6, 0], label="$u$, Input",
-            linewidth=3,
-            linestyle=":")
-    ax.plot(ts[np.argmax(r.u == 1) + 1:], r.u[np.argmax(r.u == 1):], color=[0, 0.6, 0], linewidth=3, linestyle=":")
-    ax.plot(ts[1:np.argmax(r.y == 1) + 1], (((r.y - 0.5) * 1.05) + 0.5)[:np.argmax(r.y == 1)], color=[1, 0.7, 0],
-            label="$y$, Response", linewidth=3, linestyle=":")
-    ax.plot(ts[np.argmax(r.y == 1) + 1:], (((r.y - 0.5) * 1.05) + 0.5)[np.argmax(r.y == 1):], color=[1, 0.7, 0],
-            linewidth=3, linestyle=":")
-    ax.plot(ts[1:], r.traj.wt[:, 0], color='k', linestyle=":", linewidth=3, label="Learning rate")
-    ax.legend(loc='upper left', bbox_to_anchor=[0, 0.9, 0.2, 0.1], fontsize=15)
-    ax.set_title(title, fontsize=25)
-    ax.set_ylabel("Input and Response", fontsize=20)
-    ax.set_xlabel("Trial number", fontsize=20)
-    ax.set_ylim(-0.1, 1.1)
-    ax.tick_params(axis='y', which='major', labelsize=17)
-    ax.tick_params(axis='y', which='minor', labelsize=17)
+# %% divisive normalization for rosenberg
+s1 = c.ROSENBERG_SCALING * np.linspace(0, 1, 1001)
+s2 = c.ROSENBERG_SCALING * np.array([0.1, 0.2, 0.3, 0.8])
 
+nt_resp1 = utils.ei_gain_func(s1, 1, 0.5, 1)
+nt_resp2 = utils.ei_gain_func(s2, 1, 0.5, 1)
+asd_resp1 = utils.ei_gain_func(s1, 1, 0.5, 0.75)
+asd_resp2 = utils.ei_gain_func(s2, 1, 0.5, 0.75)
 
-def plot_boxplots(arr, ax, title, ylabel):
-    ax.boxplot(arr[:, 0], positions=[0.5], showfliers=False, widths=0.4,
-               capprops={"color": c.ASD_COLOR, "alpha": 0.7},
-               medianprops={"color": c.ASD_COLOR, "linewidth": 3},
-               whiskerprops=dict(color=c.ASD_COLOR, alpha=0.7, linewidth=2),
-               boxprops=dict(color=c.ASD_COLOR))
-    ax.scatter(np.full_like(arr[:, 0], 0.5), arr[:, 0], c="none", s=15, edgecolor='k')
-    ax.boxplot(arr[:, 1], positions=[1], showfliers=False, widths=0.4,
-               capprops={"color": c.NT_COLOR, "alpha": 0.7},
-               medianprops={"color": c.NT_COLOR, "linewidth": 3},
-               whiskerprops=dict(color=c.NT_COLOR, alpha=0.7, linewidth=2),
-               boxprops=dict(color=c.NT_COLOR))
-    ax.scatter(np.full_like(arr[:, 0], 1), arr[:, 1], c="none", s=15, edgecolor='k')
-    ax.set_title(title, fontsize=25)
-    ax.set_ylabel(ylabel, fontsize=25)
-    ax.set_xticklabels(["ASD", "NT"], fontweight='bold')
-    ax.tick_params(axis='y', which='major', labelsize=17)
-    ax.tick_params(axis='y', which='minor', labelsize=17)
+nt_div_norm = nt_resp1[:, None] / (nt_resp1[:, None] + nt_resp2[None, :])
+asd_div_norm = asd_resp1[:, None] / (asd_resp1[:, None] + asd_resp2[None, :])
 
+fig, ax = plt.subplots(figsize=pl.get_fig_size(.7, 1.2))
+ax.plot(s1, nt_div_norm)  # , label=[f"NDR /{s:.1f}" for s in s2])
+ax.set_prop_cycle(None)
+ax.plot(s1, asd_div_norm, linestyle=":", alpha=0.7)  # , label=[f"IDR /{s:.1f}" for s in s2]
+# ax.vlines(s2,0,1,colors='k',linestyles="--",linewidths=1,alpha=0.5)
+# ax.grid(False)
+# ax.legend()
+ax.set_xticks(s2, [f"{s:.2g}" for s in s2], fontsize=10)
+ax.set_title("Divisive normalization and decreased inhibition")
+pl.savefig(fig, "Rosenberg divisive normalization", si=True, ignore=[ax])
+pl.close_all()
+# %%
+fig, ax = plt.subplots(figsize=pl.get_fig_size(0.8, 1.4))
+sig = np.arange(0.1, 0.91, 0.01)
+nt_resp = utils.hill_func(sig, 16, 0.5)
+asd_resp = utils.hill_func(sig, 7, 0.5)
+ax.plot(sig[1:], np.diff(asd_resp) / np.diff(nt_resp), label="Ratio")
+ax.hlines(1, 0, 1, 'k', '--', linewidths=1.5, alpha=0.6, label="Equality")
+ax.semilogy(base=10)
+ax.set(xlabel="Signal", ylabel=r"Signal difference ratio $\frac{\Delta IDR}{\Delta NDR}$",
+       title="Discriminability ratio")
+ax.legend()
+pl.savefig(fig, "Discriminability ratio", si=True, ignore=[ax])
 
-fig, axes = plt.subplots(2, 2, figsize=pl.get_fig_size(1, 1.6))
-axes = np.ravel(axes)
+# %% simulate different parameters for LCA.
+params = [
+    dict(threshold=0.51, n_sim=200, leak=1, inhibition=0.25, noise=0.32),
+    dict(threshold=0.65, n_sim=200, leak=1, inhibition=0.25, noise=0.32),
+    dict(threshold=0.51, n_sim=200, leak=1, inhibition=0.1, noise=0.32),
+    dict(threshold=0.51, n_sim=200, leak=1, inhibition=0.25, noise=0.4)
+]
+fig1 = plt.figure(figsize=pl.get_fig_size(2, 2.5))
+fig2 = plt.figure(figsize=pl.get_fig_size(2, 2.5))
+gs1 = fig1.add_gridspec(2, 2)
+ax1 = fig1.add_subplot(gs1[0, 0])
+axes1 = [ax1, fig1.add_subplot(gs1[0, 1], sharey=ax1), fig1.add_subplot(gs1[1, 0], sharey=ax1),
+         fig1.add_subplot(gs1[1, 1], sharey=ax1)]
+gs2 = fig2.add_gridspec(2, 2)
+axes2 = [fig2.add_subplot(gs2[0, 0]), fig2.add_subplot(gs2[0, 1]), fig2.add_subplot(gs2[1, 0]),
+         fig2.add_subplot(gs2[1, 1])]
+for p, ax_idr, ax_ei in zip(params, axes1, axes2):
+    asd_correct_percent, ei_correct_percent, nt_correct_percent, signal_levels, times = lca_simulations.lca_robertson_simulation(
+        **p)
+    nt_threshold_idx = np.argmax(nt_correct_percent > 0.8, axis=1)
+    nt_threshold_idx[nt_correct_percent.max(axis=1) < 0.8] = signal_levels.size - 1
+    asd_threshold_idx = np.argmax(asd_correct_percent > 0.8, axis=1)
+    asd_threshold_idx[asd_correct_percent.max(axis=1) < 0.8] = signal_levels.size - 1
+    ei_threshold_idx = np.argmax(ei_correct_percent > 0.8, axis=1)
+    ei_threshold_idx[ei_correct_percent.max(axis=1) < 0.8] = signal_levels.size - 1
 
-plot_param_trajectory(sim_fit, axes[0], "Base parameters fit")
-plot_param_trajectory(asd_fit, axes[1], "High PU parameters fit")
-plot_boxplots(alphas, axes[2], "Perceptual uncertainty", r"$\alpha$")
-axes[2].set_ylim([0, axes[2].get_ylim()[1]])
-plot_boxplots(omegas, axes[3], "Volatility estimates", r"$\omega_3$")
+    pl.plot_robertson_vs_lca(ax_ei, None, nt_threshold_idx, ei_threshold_idx, signal_levels, times, 0.158,
+                             c.EI_COLOR, labels=["Full inhibition", "Decreased inhibition"])
+    ax_ei.set_title(f"Threshold={p['threshold']:.2g}, Inhibition={p['inhibition']:.2g}, Noise={p['noise']:.2g}")
+    pl.plot_robertson_vs_lca(ax_idr, None, nt_threshold_idx, asd_threshold_idx, signal_levels, times, 0.158,
+                             labels=["NDR", "IDR"])
+    ax_ei.set_title(f"Threshold={p['threshold']:.2g}, Inhibition={p['inhibition']:.2g}, Noise={p['noise']:.2g}")
+    ax_idr.set_title(f"Threshold={p['threshold']:.2g}, Inhibition={p['inhibition']:.2g}, Noise={p['noise']:.2g}")
+pl.savefig(fig2, "LCA with different parameters decreased inhibition", si=True, numbering_size=30, shift_x=-0.1,
+           shift_y=1.075)
+pl.savefig(fig1, "LCA with different parameters", si=True, shift_x=-0.1,
+           shift_y=1.075)
+pl.close_all()
 
-pl.savefig(fig, "hgf model", si=True, tight=True, shift_x=-0.15, shift_y=1.05, numbering_size=30)
+# %% simulate rosenberg LCA with different parameters.
+params = [
+    dict(threshold=0.6, n_sim=200, leak=.51, inhibition=0.2, noise=0.4),
+    dict(threshold=0.55, n_sim=200, leak=.51, inhibition=0.2, noise=0.3),
+    dict(threshold=0.6, n_sim=200, leak=.55, inhibition=0.2, noise=0.3),
+    dict(threshold=0.6, n_sim=200, leak=.51, inhibition=0.1, noise=0.3)
+]
+fig = plt.figure(figsize=pl.get_fig_size(2, 2.5))
+gs = fig.add_gridspec(2, 2)
+ax1 = fig.add_subplot(gs[0, 0])
+axes = [ax1, fig.add_subplot(gs[0, 1], sharey=ax1), fig.add_subplot(gs[1, 0], sharey=ax1),
+        fig.add_subplot(gs[1, 1], sharey=ax1)]
+for p, ax in zip(params, axes):
+    asd_correct_percent, nt_correct_percent, signal_levels, times = lca_simulations.simulate_rosenberg(
+        ax1=ax, title=f"Threshold={p['threshold']:.2g}, Inhibition={p['inhibition']:.2g}, Noise={p['noise']:.2g}", **p)
+pl.savefig(fig, "Rosenberg LCA with different parameters", shift_x=-0.1, shift_y=1.075)
+pl.close_all()
+
+# %% plot HGF
+asd_fit, sim_fit, alphas, omegas = utils.load_hgf()
+fig = pl.plot_hgf(asd_fit, sim_fit, alphas, omegas)
+pl.savefig(fig, "hgf model", si=True, tight=True, shift_x=-0.1, shift_y=1.1, numbering_size=30)
+pl.close_all()

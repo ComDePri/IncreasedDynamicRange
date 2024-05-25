@@ -1,14 +1,17 @@
-import os
-from tqdm import tqdm
-import constants as c
+from data_fitting import TappingData
 import importlib
-import numpy as np
-import matplotlib.pyplot as plt
-import plotting as pl
-import scipy.stats as st
-from scipy.optimize import curve_fit
+import os
 import re
 from collections import namedtuple
+import matplotlib.pyplot as plt
+import numpy as np
+import scipy.stats as st
+from scipy.optimize import curve_fit
+from scipy.stats import truncnorm as tn
+from tqdm import tqdm
+import constants as c
+import plotting as pl
+import scipy.io as scio
 
 
 def reload(module):
@@ -164,10 +167,10 @@ def kalman_filter_step(t, kg, est_var, meas_var, est_sig, sig, prior_variance=c.
     """
     delta = perturb_prob * prior_variance
     last_est_var = (1 - perturb_prob) * est_var[..., t - 1]
-    kg[:, t] = (last_est_var + delta) / (
+    kg[..., t] = (last_est_var + delta) / (
             (last_est_var + delta) + meas_var[..., t])
-    est_var[:, t] = (1 - kg[..., t]) * (last_est_var + delta)
-    est_sig[:, t] = est_sig[..., t - 1] + kg[..., t] * (
+    est_var[..., t] = (1 - kg[..., t]) * (last_est_var + delta)
+    est_sig[..., t] = est_sig[..., t - 1] + kg[..., t] * (
             sig[..., t] - est_sig[..., t - 1])
 
 
@@ -369,12 +372,13 @@ def run_learning_trial(n=None, nu=None):
     nu = np.array(nu)
     Km = np.zeros((c.LR_MAX_T + 1, n.size)) + c.LR_START_THRESHOLD
     responses = np.zeros((c.LR_MAX_T + 1, n.size))
+    max_resp = ei_gain_func(1, n, Km[0, :], nu)
     for i in range(1, c.LR_MAX_T + 1):
         s = np.random.uniform(0, 1)
         responses[i, :] = ei_gain_func(s, n, Km[i - 1, :], nu)
         category = 1 * (s > c.LR_THRESHOLD)
-        is_correct = 1 * (1 * (responses[i, :] > Km[i - 1, :]) == category)
-        Km[i, :] = Km[i - 1, :] - (1 - is_correct) * c.LR_ALPHA * (category - responses[i, :])
+        is_correct = (responses[i, :] > c.LR_THRESHOLD) == category
+        Km[i, :] = Km[i - 1, :] - (1 - is_correct) * c.LR_ALPHA * (category * max_resp - responses[i, :])
     return Km
 
 
@@ -474,13 +478,15 @@ def get_threshold_pass_idx(data, thresh):
     return np.argmax(data >= thresh), np.argwhere(data >= thresh)[-1][0]
 
 
-def get_width_of_var(boot_asd_var, boot_ei_var, boot_nt_var, s):
+def get_width_of_var(variances_list, s):
     """
     Calculate the width of the variances
     """
-    start_sig = [[[], [], []], [[], [], []]]
-    end_sig = [[[], [], []], [[], [], []]]
-    for i, var in enumerate([boot_asd_var, boot_ei_var, boot_nt_var]):
+    variances_list = [var for var in variances_list if var is not None]
+    n_vars = len(variances_list)
+    start_sig = [[[] for j in range(n_vars)] for i in range(2)]
+    end_sig = [[[] for j in range(n_vars)] for i in range(2)]
+    for i, var in enumerate(variances_list):
         for j, thresh in enumerate([var.max() / 2, var.max() / np.e]):
             st_idx, e_idx = get_threshold_pass_idx(var, thresh)
             start_sig[j][i].append(s[st_idx])
@@ -501,13 +507,14 @@ def get_effective_n(population_resp, signal, km=0.5, func=hill_func):
 
 
 HETEROGENEITY_TO_N = None
+HETEROGENEITY_TO_N_STD = None
 
 
-def get_effective_n_from_heterogeneity(heterogeneity):
-    global HETEROGENEITY_TO_N
+def get_effective_n_from_heterogeneity(heterogeneity, base_n=16):
+    global HETEROGENEITY_TO_N, HETEROGENEITY_TO_N_STD
     if HETEROGENEITY_TO_N is None:
         N_NEURONS = 300
-        N = 16
+        N = base_n
         N_LEVELS = 500
         REPEATS = 100
         s = np.linspace(0, 1, N_LEVELS)[:, None]
@@ -516,24 +523,40 @@ def get_effective_n_from_heterogeneity(heterogeneity):
         # retrieved_n = np.zeros_like(noise_level_list, dtype=np.float64)
 
         def simulate_an_retrieve_effective_n(s, noise_level):
-            retrieved_n = 0
-            for _ in range(REPEATS):
+            ns = np.zeros(REPEATS)
+            for i in range(REPEATS):
                 km = 0.5 + noise_level * np.random.uniform(-1, 1, size=(1, N_NEURONS))
                 resp = hill_func(s, N, km)
-                retrieved_n += curve_fit(lambda S, n: hill_func(S, n, 0.5), np.squeeze(s), resp.mean(1))[0].item()
-            retrieved_n /= REPEATS
-            return retrieved_n
+                ns[i] = curve_fit(lambda S, n: hill_func(S, n, 0.5), np.squeeze(s), resp.mean(1))[0].item()
+            return [ns.mean(), ns.std()]
 
         retrieved_n = []
+        retrieved_n_std = []
         for noise_level in tqdm(noise_level_list, desc="Heterogeneity to N:"):
-            retrieved_n.append(simulate_an_retrieve_effective_n(s, noise_level))
+            n, std = simulate_an_retrieve_effective_n(s, noise_level)
+            retrieved_n.append(n)
+            retrieved_n_std.append(std)
+
         retrieved_n = np.array(retrieved_n)
+        retrieved_n_std = np.array(retrieved_n_std)
         HETEROGENEITY_TO_N = np.vstack([noise_level_list, retrieved_n])
-    insert_idx = np.searchsorted(HETEROGENEITY_TO_N[0], heterogeneity)
+        HETEROGENEITY_TO_N_STD = np.vstack([noise_level_list, retrieved_n_std])
+    insert_idx = np.minimum(np.searchsorted(HETEROGENEITY_TO_N[0], heterogeneity), HETEROGENEITY_TO_N.shape[-1] - 1)
+    if isinstance(insert_idx, np.ndarray):
+        insert_idx[insert_idx == 0] = 1
+    elif insert_idx == 0:
+        insert_idx = 1
     diff_left, diff_right = np.abs(heterogeneity - HETEROGENEITY_TO_N[0, insert_idx - 1]), np.abs(
         heterogeneity - HETEROGENEITY_TO_N[0, insert_idx])
     return (diff_left / (diff_left + diff_right)) * HETEROGENEITY_TO_N[1, insert_idx - 1] + \
         (diff_right / (diff_left + diff_right)) * HETEROGENEITY_TO_N[1, insert_idx]
+
+
+def get_n_heterogeneity(n):
+    if HETEROGENEITY_TO_N is None:
+        _ = get_effective_n_from_heterogeneity(0.1)
+    return HETEROGENEITY_TO_N_STD[
+        1, np.minimum(np.searchsorted(-HETEROGENEITY_TO_N[1], -n), HETEROGENEITY_TO_N_STD.shape[-1] - 1)]
 
 
 LOG_HETEROGENEITY_TO_N = None
@@ -541,7 +564,7 @@ LOG_HETEROGENEITY_TO_N = None
 
 def get_effective_log_n_from_heterogeneity(heterogeneity):
     global LOG_HETEROGENEITY_TO_N
-    if HETEROGENEITY_TO_N is None:
+    if LOG_HETEROGENEITY_TO_N is None:
         N_NEURONS = 300
         N = 40
         N_LEVELS = 500
@@ -570,6 +593,45 @@ def get_effective_log_n_from_heterogeneity(heterogeneity):
         heterogeneity - LOG_HETEROGENEITY_TO_N[0, insert_idx])
     return (diff_left / (diff_left + diff_right)) * LOG_HETEROGENEITY_TO_N[1, insert_idx - 1] + \
         (diff_right / (diff_left + diff_right)) * LOG_HETEROGENEITY_TO_N[1, insert_idx]
+
+
+N_TO_HETEROGENEITY = dict()
+
+
+def get_heterogeneity_from_n(n, base_n, n_neurons=300, n_levels=200, repeats=20):
+    global N_TO_HETEROGENEITY
+    current_key = f"{base_n}"
+    if n == base_n:
+        return 0
+    if current_key not in N_TO_HETEROGENEITY.keys():
+        s = np.linspace(0, 1, n_levels)[:, None]
+        noise_level_list = np.linspace(0, 0.5, n_levels)
+
+        # retrieved_n = np.zeros_like(noise_level_list, dtype=np.float64)
+
+        def simulate_an_retrieve_effective_n(s, noise_level):
+            retrieved_n = 0
+            for _ in range(repeats):
+                km = 0.5 + noise_level * np.random.uniform(-1, 1, size=(1, n_neurons))
+                resp = hill_func(s, base_n, km)
+                retrieved_n += curve_fit(lambda S, n: hill_func(S, n, 0.5), np.squeeze(s), resp.mean(1))[0].item()
+            retrieved_n /= repeats
+            return retrieved_n
+
+        retrieved_n = []
+        for noise_level in noise_level_list:
+            retrieved_n.append(simulate_an_retrieve_effective_n(s, noise_level))
+        retrieved_n = np.array(retrieved_n)
+        N_TO_HETEROGENEITY[current_key] = np.vstack([noise_level_list, retrieved_n])
+
+    cur_n_arr = N_TO_HETEROGENEITY[current_key]
+    insert_idx = np.searchsorted(-cur_n_arr[1], -n)
+    if insert_idx == cur_n_arr.shape[1]:
+        return cur_n_arr[0, insert_idx - 1]
+    diff_left, diff_right = np.abs(n - cur_n_arr[1, insert_idx - 1]), np.abs(
+        n - cur_n_arr[1, insert_idx])
+    return (diff_left / (diff_left + diff_right)) * cur_n_arr[0, insert_idx - 1] + \
+        (diff_right / (diff_left + diff_right)) * cur_n_arr[0, insert_idx]
 
 
 def permutation_test(x: np.array, y: np.array, test_func, alternative="two.sided", n_perm=10000,
@@ -612,7 +674,148 @@ def permutation_test(x: np.array, y: np.array, test_func, alternative="two.sided
     if return_dist:
         return_vals = return_vals + (permutation_h0,)
     if plot:
-        fig = pl.plot_hist_with_stat(statistic, permutation_h0, "Permutation test", p=p, hist_color=hist_color,
+        fig = pl.plot_hist_with_stat(statistic, permutation_h0, "Permutation test", p=p if p > 0 else 1 / n_perm,
+                                     hist_color=hist_color,
                                      line_color=line_color)
         return_vals = return_vals + (fig,)
     return return_vals
+
+
+def power_analysis(group1, group2, test_func, population_sizes=None, n_boot=10000, seed=c.SEED, **kwargs):
+    """
+    Perform power analysis of the given statistic with the data.
+    :param group1: 1D array representing group 1
+    :param group2: 1D array representing group 2
+    :param test_func: Callable that gets two 2D arrays and calculates a statistic and it's p value on them, Used to build H0.
+    :param population_sizes: list of population sizes to test
+    :param n_boot: number of bootstrap samples to perform. Default 10000
+    :return: power of the test for each population size
+    """
+    if seed is not None:
+        np.random.seed(seed)
+    if population_sizes is None:
+        population_sizes = group1.size // 5
+    if isinstance(population_sizes, int):
+        population_sizes = np.unique(np.linspace(2, group1.size, population_sizes, dtype=np.int64))
+        if group1.size not in population_sizes:
+            population_sizes = np.append(population_sizes, group1.size)
+    elif isinstance(population_sizes, np.ndarray):
+        population_sizes = np.unique(population_sizes).astype(int)
+        if group1.size not in population_sizes:
+            population_sizes = np.append(population_sizes, group1.size)
+    power = np.zeros_like(population_sizes, dtype=np.float64)
+    for i, pop_size in enumerate(tqdm(population_sizes, desc="Power analysis progress")):
+        group1_boot_idx = np.random.choice(np.arange(group1.size), size=(n_boot, pop_size), replace=True)
+        group2_boot_idx = np.random.choice(np.arange(group2.size), size=(n_boot, pop_size), replace=True)
+        power[i] = (test_func(group1[group1_boot_idx], group2[group2_boot_idx], axis=-1, **kwargs)[1] < 0.05).mean()
+    return population_sizes, power
+
+
+def cohens_d(x, y):
+    nx = x.shape[-1]
+    ny = y.shape[-1]
+    dof = nx + ny - 2
+    return (np.mean(x, axis=-1) - np.mean(y, axis=-1)) / np.sqrt(
+        ((nx - 1) * np.std(x, axis=-1, ddof=1) ** 2 + (ny - 1) * np.std(y, axis=-1, ddof=1) ** 2) / dof)
+
+
+def adjacency_effect_size_calc(means, stds):
+    return (np.diff(means)) / (stds[1:] + stds[:-1])
+
+
+def gain_func_generator(n, c=1., **kwargs):
+    return lambda x, y=n, z=c: ei_gain_func(x, y, 0.5, z)
+
+
+def rosenberg_gain_func_generator(c=1., **kwargs):
+    return lambda x, y=c: ei_gain_func(x, 1, 0.5, y)
+
+
+def sample_truncnorm(loc, scale, low, high, size):
+    return tn(a=(low - loc) / scale, b=(high - loc) / scale, loc=loc, scale=scale).rvs(size=size)
+
+
+def load_power_analysis_data(nt_n, asd_n):
+    data = dict()
+    individual_ns = dict()
+    data_path = os.path.join('data', 'data_%d_%d' % (nt_n, asd_n))
+    for f in os.listdir(data_path):
+        if f.endswith('.npz') and "power_analysis" in f:
+            sim_type = f[:f.find("_")]
+            het_level = float(f[f.rfind("_") + 1:f.rfind(".")])
+            loaded = np.load(os.path.join(data_path, f), allow_pickle=True)
+            if data.get(het_level, None) is None:
+                data[het_level] = dict()
+            data[het_level][sim_type] = dict()
+            for k in loaded.keys():
+                data[het_level][sim_type][k] = loaded[k]
+        elif f.endswith('.npz'):
+            sim_type = f[:f.find("_")]
+            het_level = float(f[f.rfind("_") + 1:f.rfind(".")])
+            loaded = np.load(os.path.join(data_path, f))
+            if individual_ns.get(het_level, None) is None:
+                individual_ns[het_level] = dict()
+            individual_ns[het_level][sim_type] = dict()
+            for k in loaded.keys():
+                individual_ns[het_level][sim_type][k] = loaded[k]
+    return data, individual_ns
+
+
+def parse_power_analysis_data(data, individual_ns, return_n=False):
+    population = list(data.values())[0]["br"]["pop"]
+    shape = (5, len(data.keys()), population.size)
+    powers = np.zeros(shape, dtype=float)
+    ns_shape = (4, len(data.keys()), 3000)
+    asd_ns = np.zeros(ns_shape, dtype=float)
+    nt_ns = np.zeros(ns_shape, dtype=float)
+    heterogeneities = np.array(sorted(data.keys()))
+    for i, k in enumerate(heterogeneities):
+        powers[0, i, :] = data[k]["br"]["power_ratio"]
+        powers[1, i, :] = data[k]["encoding"]["power"]
+        powers[2, i, :] = data[k]["slow"]["power"]
+        try:
+            powers[3, i, :] = data[k]["lca"]["power"][0]
+        except Exception:
+            powers[3, i, :] = data[k]["lca"]["power"][0][:-1]
+        powers[4, i, :] = data[k]["lca"]["power"][1]
+
+        asd_ns[0, i, :] = np.squeeze(individual_ns[k]["br"]["asd"])
+        asd_ns[1, i, :] = np.squeeze(individual_ns[k]["encoding"]["asd"])
+        asd_ns[2, i, :] = np.squeeze(individual_ns[k]["slow"]["asd"])
+        asd_ns[3, i, :] = np.squeeze(individual_ns[k]["lca"]["asd"])
+        nt_ns[0, i, :] = np.squeeze(individual_ns[k]["br"]["nt"])
+        nt_ns[1, i, :] = np.squeeze(individual_ns[k]["encoding"]["nt"])
+        nt_ns[2, i, :] = np.squeeze(individual_ns[k]["slow"]["nt"])
+        nt_ns[3, i, :] = np.squeeze(individual_ns[k]["lca"]["nt"])
+    if return_n:
+        return population, powers, heterogeneities, asd_ns, nt_ns
+    return population, powers, heterogeneities
+
+
+def get_tapping_heterogeneities():
+    if not os.path.exists("individual_fits_ns.npz"):
+        fitting_kwargs = dict(prior_var=0.1, perturb_prob=1e-6, base_n=20, n_neurons=200, perceptual_noise=0.03,
+                              fit_scale_factor=50)
+        asd_ns = TappingData("ASD.mat", **fitting_kwargs).get_hill_coefficients()
+        nt_ns = TappingData("NT.mat", **fitting_kwargs).get_hill_coefficients()
+        np.savez("individual_fits_ns.npz", asd_ns=asd_ns, nt_ns=nt_ns)
+    else:
+        loaded = np.load("individual_fits_ns.npz")
+        asd_ns = loaded["asd_ns"]
+        nt_ns = loaded["nt_ns"]
+    asd_hets = np.array([get_heterogeneity_from_n(n, 20) for n in asd_ns])
+    nt_hets = np.array([get_heterogeneity_from_n(n, 20) for n in nt_ns])
+    return asd_hets, asd_ns, nt_hets, nt_ns
+
+
+def tapas_sgm(x, a):
+    return a / (1 + np.exp(-x))
+
+
+def load_hgf(path=os.path.join('data','hgf.mat')):
+    hgf_mat = scio.loadmat(path, struct_as_record=False, squeeze_me=True)
+    return hgf_mat["asd_fit"], hgf_mat["sim_fit"], hgf_mat["alphas"], hgf_mat["omegas"]
+
+
+def mse_bic(mse, k, n):
+    return k * np.log(n) - 2 * np.log(mse)

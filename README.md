@@ -15,7 +15,7 @@ The file is separated into logical blocks with the `# %%` marking, with an infor
 # Helper files
 * **`plotting.py`**: This files sets plotting constants, defines helper functions for plotting and specific function for plots
 * **`utils.py`**: This file contains utility functions performing various calculations that are used in the simulations. 
-* **`contants.py`**: This files contains the constants used in all files - plotting parameters and simulation constants. Changing values in this files changes the parameters of the correspinding simulation.
+* **`contants.py`**: This files contains the constants used in all files - plotting parameters and simulation constants. Changing values in this files changes the parameters of the corresponding simulation.
 * **`data_fitting.py`**: This file contains the functions used to fit data to the model.
 
 # HGF simulation

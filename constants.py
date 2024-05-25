@@ -11,6 +11,8 @@ EI_COLOR = "#7294D4"
 WHITE = "#FAEBD7"
 HIST_COLOR = "#F2AD00"
 FILL_COLOR = "#F98400"
+DARK_NT_COLOR="#005045"
+DARK_ASD_COLOR="#7F0000"
 HSPACE = 0.2
 WSPACE = 0.2
 TOP_SPACE = 0.92
@@ -49,9 +51,9 @@ NU = 0.75
 NV_NT_KM_SD = .01
 NV_ASD_KM_SD = .175
 NV_SIGNAL_SD = 0.1
-NV_NUM_S = 300
-NV_REPEATS = 150
-NV_PR_REPEATS = 100
+NV_NUM_S = 200
+NV_REPEATS = 100
+NV_PR_REPEATS = 75
 NV_KM = .5
 
 # learning rate and accuracy
@@ -59,7 +61,7 @@ LR_NT_N = 16
 LR_ASD_N = 7
 LR_THRESHOLD = 0.5
 LR_START_THRESHOLD = 0.01
-LR_MAX_T = 4000
+LR_MAX_T = 10000
 LR_DT = 1
 LR_LR_IDX = int((LR_MAX_T / LR_DT) // 10) - 1
 LR_ALPHA = 0.002
@@ -67,7 +69,7 @@ LR_N_TRIALS = 200
 LR_VAR_WINDOW_SIZE = 6
 LR_LAST_KM_BIN_NUM = 40
 LR_DERIVATIVE_FILTER_SIZE = 200
-LR_THRESHOLD_PERCENTAGE = 0.9
+LR_THRESHOLD_PERCENTAGE = 0.95
 # sensitivity to signal differences
 SSD_NUM_S_LEVELS = 1000
 SSD_NT_N = 16
@@ -127,6 +129,8 @@ FI_NUM_S = 10000
 # =======================================================
 # ===================== SI constants ====================
 # =======================================================
+ROSENBERG_SCALING = 10
+
 # Population Response
 SI_PR_SLOPE = 35
 SI_PR_THRESH = 0.5

@@ -1,10 +1,11 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.stats
+from tqdm import tqdm
+
 import constants as c
 import idr_utils as utils
 import plotting as pl
-from tqdm import tqdm
 
 
 def simulate_hebbian_learning():
@@ -23,10 +24,10 @@ def simulate_hebbian_learning():
     EI_IDX = 1
     ASD_IDX = 2
 
-    time_to_90 = np.argmax(Km >= c.LR_THRESHOLD * c.LR_THRESHOLD_PERCENTAGE, axis=1)
-    nt_lr = time_to_90[..., NT_IDX]
-    ei_lr = time_to_90[..., EI_IDX]
-    asd_lr = time_to_90[..., ASD_IDX]
+    time_to_95 = np.argmax(Km >= c.LR_THRESHOLD * c.LR_THRESHOLD_PERCENTAGE, axis=1)
+    nt_lr = time_to_95[..., NT_IDX]
+    ei_lr = time_to_95[..., EI_IDX]
+    asd_lr = time_to_95[..., ASD_IDX]
 
     # Check for differences in learning rate
     wilcoxon_res = scipy.stats.wilcoxon(nt_lr, asd_lr, alternative="less")
@@ -49,6 +50,18 @@ def simulate_hebbian_learning():
     lr_fig, subax = pl.plot_learning_rate_and_accuracy(Km, time, None)
     pl.savefig(lr_fig, "learning rate and accuracy", ignore=[subax], shift_x=-0.1, shift_y=1.05, tight=False)
     pl.plt.close()
+
+    # plot the variance on Km across timepoints
+    km_cv = Km.std(axis=0) / Km.mean(axis=0)
+    fig, ax = plt.subplots(1, 1)
+    ax.plot(km_cv[4:4001, NT_IDX], color=c.NT_COLOR, label="NDR")
+    ax.plot(km_cv[4:4001, ASD_IDX], color=c.ASD_COLOR, label="IDR")
+    ax.plot(km_cv[4:4001, EI_IDX], color=c.EI_COLOR, label="EI")
+    ax.set_xlabel("Time [steps]",fontsize=12)
+    ax.set_ylabel("Coefficient of Variance",fontsize=12)
+    ax.set_title("Dynamics of Coefficient of Variance\nof learned threshold",fontsize=14)
+    pl.savefig(fig, "variance of learned threshold",ignore=[ax], tight=False,si=True)
+    plt.close(fig)
     # Check for differences in bias and variance of the final learned threshold
     last_km_nt = Km[:, -1, NT_IDX]
     last_km_ei = Km[:, -1, EI_IDX]
@@ -78,8 +91,8 @@ def simulate_hebbian_learning():
               scipy.stats.ttest_rel(0.5 - last_km_nt, 0.5 - last_km_asd, alternative="less"))
         print("EI-ASD: last-learned threshold, paired t-test:",
               scipy.stats.ttest_rel(0.5 - last_km_ei, 0.5 - last_km_asd, alternative="less"))
-        print("EI-NT: last-learned threshold, paired t-test:",
-              scipy.stats.ttest_rel(0.5 - last_km_ei, 0.5 - last_km_nt, alternative="less"))
+        print("NT-EI: last-learned threshold, paired t-test:",
+              scipy.stats.ttest_rel(0.5 - last_km_nt, 0.5 - last_km_ei, alternative="less"))
 
         var_stat, var_p_val = utils.f_test(last_km_asd, last_km_nt, "greater")
         print(f"Variance equality F-test, ASD var: {last_km_asd.var():.4g}, NT var: {last_km_nt.var():.4g}\n"
@@ -91,7 +104,7 @@ def simulate_hebbian_learning():
               f"F({last_km_asd.size - 1},{last_km_ei.size - 1})={var_stat:.4g}, "
               f"p<{utils.num2latex(var_p_val)}")
 
-        var_stat, var_p_val = utils.f_test(last_km_ei, last_km_nt, "greater")
+        var_stat, var_p_val = utils.f_test(last_km_nt, last_km_ei, "greater")
         print(f"Variance equality F-test, EI var: {last_km_ei.var():.4g}, NT var: {last_km_nt.var():.4g}\n"
               f"F({last_km_asd.size - 1},{last_km_nt.size - 1})={var_stat:.4g}, "
               f"p<{utils.num2latex(var_p_val)}")

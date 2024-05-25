@@ -198,8 +198,8 @@ ytick.alignment:     center_baseline  # alignment of yticks
 ### GRIDS
 grid.color       :   'gray'      # grid color
 grid.linestyle   :   -       # dotted
-grid.linewidth   :   0.8     # in points
-grid.alpha       :   0.7     # transparency, between 0.0 and 1.0
+grid.linewidth   :   0.5     # in points
+grid.alpha       :   0.5     # transparency, between 0.0 and 1.0
 
 ### Legend
 legend.loc:           best

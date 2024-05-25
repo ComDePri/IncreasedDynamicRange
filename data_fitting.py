@@ -45,8 +45,6 @@ def coarse_to_fine_search(x: np.array, y: [int, float, np.array], fit_params_dic
             elif cur_min_idx == 0:
                 min_idx = 0
             params[keys[k]] = [cur_values[min_idx], cur_values[max_idx]]
-        # if np.isclose(losses[(i,) + min_loss_idx], last_loss, rtol=rtol, atol=atol):
-        #     break
         last_loss = losses[(i,) + min_loss_idx]
     best_params = {k: v[-1] if v[-1] == params[k][-1] else (v[0] if v[0] == params[k][0] else np.mean(v)) for k, v in
                    params.items()}
@@ -120,6 +118,7 @@ def get_heterogeneity_from_n(n, base_n, nu):
         (diff_right / (diff_left + diff_right)) * cur_n_arr[0, insert_idx]
 
 
+
 class TappingData:
     MAX_CHANGE = 45
 
@@ -150,6 +149,7 @@ class TappingData:
             i in range(self.n_subjects)]
         self.fitting_kwargs = fitting_kwargs
         self.fitted_n = None
+        self.rosenberg_fitted_nu = None
         self.group_dynamics_mean = None
         self.group_dynamics_std = None
         self.diffs = None
@@ -252,7 +252,28 @@ class TappingData:
                     self._kalman_filter(signal, params["n"], seed=97, **self.fitting_kwargs)[
                         [(i * increased_freq_factor) for i in range(self.group_dynamics_mean.shape[-1])]]
         return self.simulated_dynamics_mean
+    def fit_to_group_dynamics_rosenberg(self, iterations=10):
+        self._calculate_clean_dynamics()
+        increased_freq_factor, new_x, true_freq = self._init_group_fit_output_vars()
+        self.rosenberg_fitted_nu = np.full(self.group_dynamics_mean.shape[:-1], np.nan)
 
+        np.random.seed(97)
+        for block in range(2, self.group_dynamics_mean.shape[0]):
+            for direction in range(2):
+                interpolated_dynamics, signal = self._prepare_block_fit(block, direction, increased_freq_factor, new_x,
+                                                                        true_freq)
+                params, loss = coarse_to_fine_search(signal, interpolated_dynamics,
+                                                     {"nu": [0.1, 1.]},
+                                                     self._kalman_filter_rosenberg, self._simple_loss,
+                                                     iterations=iterations,
+                                                     block=block, **self.fitting_kwargs, rtol=0, atol=0,
+                                                     post_lag=7, pre_lag=2, tqdm=False, seed=97)
+                self.simulated_dynamics_loss[block, direction] = loss
+                self.rosenberg_fitted_nu[block, direction] = params["nu"]
+                self.simulated_dynamics_mean[block, direction] = \
+                    self._kalman_filter_rosenberg(signal, params["nu"], seed=97, **self.fitting_kwargs)[
+                        [(i * increased_freq_factor) for i in range(self.group_dynamics_mean.shape[-1])]]
+        return self.simulated_dynamics_mean
     def _init_group_fit_output_vars(self):
         self.fitted_n = np.full(self.group_dynamics_mean.shape[:-1], np.nan)
         self.simulated_dynamics_mean = np.zeros_like(self.group_dynamics_mean)
@@ -326,10 +347,6 @@ class TappingData:
         dec_ok = dec.any(axis=-1)
         ok_idx = np.concatenate([acc_ok.copy(), dec_ok.copy()], axis=2)
         ok_idx = np.repeat(ok_idx[..., None], group_dynamics.shape[-1], axis=-1)
-        # acc = np.argmax(acc, axis=-1).astype(float)
-        # dec = np.argmax(dec, axis=-1).astype(float)
-        # acc[~acc_ok] = np.nan
-        # dec[~dec_ok] = np.nan
 
         pre_change_metronome = np.stack(
             [np.nanmax(self.s[:, 1:, 0, :], axis=-1), np.nanmin(self.s[:, 1:, 0, :], axis=-1)],
@@ -417,7 +434,41 @@ class TappingData:
         sig_estimate = dense_sig[np.searchsorted(dense_resp, resp_estimate) - 1]
 
         return self._output_signal_to_freq(sig_estimate)
+    def _kalman_filter_rosenberg(self, signal, nu, **kwargs):
+        prior_var = self.fitting_kwargs["prior_var"]
+        perturb_prob = self.fitting_kwargs["perturb_prob"]
+        seed = 97
+        np.random.seed(seed)
+        signal = self._freq_to_input_signal(signal)
+        signal += np.random.normal(0, self.fitting_kwargs['perceptual_noise'], signal.shape)
+        signal = np.clip(signal, 0, 1)
+        km = 0.5
+        inhib = nu + np.random.uniform(-0.01, 0.01, size=(1, signal.shape[-1]))
 
+        resp = hill_func(10 * signal, 1., km, inhib)
+        var = resp.var(-1)
+        mean_resp = resp.mean(-1)
+
+        estimated_var = np.zeros_like(var, dtype=np.float64)  # shape=(SR_NUM_REPS, SR_NUM_STEPS)
+        estimated_var[0] = prior_var
+        resp_estimate = np.zeros_like(var, dtype=np.float64)
+        resp_estimate[0] = mean_resp[0]
+        epsilon = perturb_prob * prior_var
+        for i in range(1, resp.shape[0]):
+            if np.isnan(mean_resp[i]):
+                estimated_var[i] = estimated_var[i - 1]
+                resp_estimate[i] = resp_estimate[i - 1]
+                continue
+            last_est_var = (1 - perturb_prob) * estimated_var[i - 1]
+            kg = (last_est_var + epsilon) / ((last_est_var + epsilon) + var[i - 1])
+            estimated_var[i] = (1 - kg) * (last_est_var + epsilon)
+            resp_estimate[i] = resp_estimate[i - 1] + kg * (mean_resp[i] - resp_estimate[i - 1])
+
+        dense_sig = np.linspace(0, 1, 10000)
+        dense_resp = np.squeeze(hill_func(10 * dense_sig[:, None], 1., km, inhib).mean(-1))
+        sig_estimate = dense_sig[np.searchsorted(dense_resp, resp_estimate) - 1]
+
+        return self._output_signal_to_freq(sig_estimate)
     def _simple_loss(self, real_resp, est_resp, **kwargs):
         increased_freq_factor = self.fitting_kwargs.get('fit_scale_factor', 50)
         return np.nanmean((real_resp[3 * increased_freq_factor:] - est_resp[3 * increased_freq_factor:]) ** 2)
@@ -743,8 +794,6 @@ def plot_full_data_response_vs_fit(data: TappingData, title=None, c_model=None, 
     axes[0, 1].legend(bbox_to_anchor=[-0.45, 0.3], loc="lower left")
     axes[-1, 0].set_xticks([-2, -1, 0, 1, 2, 3, 4, 5, 6, 7])
     axes[-1, 1].set_xticks([-2, -1, 0, 1, 2, 3, 4, 5, 6, 7])
-    # for ax in axes.ravel():
-    #     ax.legend()
     if title is not None:
         fig.suptitle(title)
     return
