@@ -1,0 +1,163 @@
+from math import exp, log
+
+FIG_DIR = r"figures"
+SI_FIG_DIR = r"SI figures"
+SEED = 97
+# plotting constants
+SUBPLOT_SIZE = 8
+NT_COLOR = "#00A08A"
+ASD_COLOR = "#FF0000"
+EI_COLOR = "#7294D4"
+WHITE = "#FAEBD7"
+HIST_COLOR = "#F2AD00"
+FILL_COLOR = "#F98400"
+DARK_NT_COLOR="#005045"
+DARK_ASD_COLOR="#7F0000"
+HSPACE = 0.2
+WSPACE = 0.2
+TOP_SPACE = 0.92
+BOTTOM_SPACE = 0.12
+RIGHT_SPACE = 0.98
+LEFT_SPACE = 0.07
+DPI = 300
+LEGEND_FONT_SIZE = 20
+FRAME_ALPHA = 0.7
+FIG_TITLE_SIZE = 40
+TICK_LABELSIZE = 20
+LINEWIDTH = 1.2
+AX_TITLE_SIZE = 30
+AX_LABEL_SIZE = 30
+X_LABELPAD = 10
+Y_LABELPAD = 10
+
+EI_NU = 0.75
+# single neuron response constants
+SN_N = 10
+SN_KI = .5
+SN_NUM_S_LEVELS = 5000
+
+# population response
+PR_N_NEURONS = 250
+PR_N = 16
+PR_KM = 0.5
+PR_NT_K_STD = 0.01
+PR_ASD_K_STD = 0.175
+PR_NUM_S_LEVELS = 5000
+
+# neural variability
+NV_NUM_NEURONS = 200
+NV_N = 16
+NU = 0.75
+NV_NT_KM_SD = .01
+NV_ASD_KM_SD = .175
+NV_SIGNAL_SD = 0.1
+NV_NUM_S = 200
+NV_REPEATS = 100
+NV_PR_REPEATS = 75
+NV_KM = .5
+
+# learning rate and accuracy
+LR_NT_N = 16
+LR_ASD_N = 7
+LR_THRESHOLD = 0.5
+LR_START_THRESHOLD = 0.01
+LR_MAX_T = 10000
+LR_DT = 1
+LR_LR_IDX = int((LR_MAX_T / LR_DT) // 10) - 1
+LR_ALPHA = 0.002
+LR_N_TRIALS = 200
+LR_VAR_WINDOW_SIZE = 6
+LR_LAST_KM_BIN_NUM = 40
+LR_DERIVATIVE_FILTER_SIZE = 200
+LR_THRESHOLD_PERCENTAGE = 0.95
+# sensitivity to signal differences
+SSD_NUM_S_LEVELS = 1000
+SSD_NT_N = 16
+SSD_ASD_N = 7
+SSD_KM = 0.5
+SSD_LOW_SIG1_IDX = (SSD_NUM_S_LEVELS // 5) - 1
+SSD_LOW_SIG2_IDX = SSD_LOW_SIG1_IDX + (SSD_NUM_S_LEVELS // 10)
+SSD_HIGH_SIG1_IDX = SSD_NUM_S_LEVELS - (SSD_NUM_S_LEVELS // 5) - (SSD_NUM_S_LEVELS // 10) - 1
+SSD_HIGH_SIG2_IDX = SSD_HIGH_SIG1_IDX + (SSD_NUM_S_LEVELS // 10)
+
+# Slower updating - kalman filter simulation
+SR_N = 16
+SR_N_NEURONS = 200
+SR_SIG_MIN = 0.3
+SR_SIG_MAX = 0.7
+SR_SIG_SIGMA = 0.01
+SR_NT_SIGMA_KM = 0.01
+SR_ASD_SIGMA_KM = 0.175
+SR_MIN_SIG_PERCENTAGE = 0.1
+SR_MIN_SIG_TIMEPOINT = 50
+SR_NUM_STEPS = 500
+SR_NUM_REPS = 500
+SR_MIN_VAR = 1e-6
+SR_PLOT_REP_IDX = 0
+SR_TRACK_PERCENTAGE = 0.95
+SR_PERTURBATION_PROB = 1e-7
+SR_PRIOR_VARIANCE = 1 / 12
+
+# Binocular rivalry
+BR_N_NEURONS = 200
+BR_N = 20
+BR_NT_SIGMA_KM = 0.01
+BR_ASD_SIGMA_KM = 0.175
+BR_SIG_SIGMA = 0.03
+BR_NUM_REPS = 500
+BR_NUM_STEPS = 1000
+BR_PURE_LOW_THRESH = 0.2
+BR_PURE_HIGH_THRESH = 0.8
+
+# separatrix
+SEP_N_NEURONS = 50
+SEP_N = 16
+SEP_SIGNAL_SIGMA = 0.1
+SEP_MAX_T = 6
+SEP_DT = .5e-1
+SEP_REPEATS = 2000
+TAU = 0.2
+SEP_ACTIVE_TOL = 0.2
+
+# FI
+FI_NT_N = 16
+FI_N_LIST = [4, 8, 12, 16, 20]
+FI_NU_LIST = [0.5, 0.6, 0.7, 0.8, 0.9, 1.]
+FI_KM = .5
+FI_NUM_S = 10000
+
+# =======================================================
+# ===================== SI constants ====================
+# =======================================================
+ROSENBERG_SCALING = 10
+
+# Population Response
+SI_PR_SLOPE = 35
+SI_PR_THRESH = 0.5
+
+# Signal Differences
+SI_SSD_NT_N = 35
+SI_SSD_ASD_N = 15
+SI_SSD_THRESH = 0.5
+
+# Neural Variability
+SI_NV_THRESH = 0.5
+SI_NV_N = 35
+SI_NV_NU = 0.75
+
+# signal tracking
+SI_SR_THRESH = 0.5
+SI_SR_N = 35
+SI_SR_NUM_STEPS = 300
+# Binocular Rivalry
+SI_BR_N = 35
+
+# Hebbian Learning
+SI_LR_NT_N = 35
+SI_LR_ASD_N = 12
+
+# encoding capacity
+SI_FI_N_LIST = [8., 16., 24., 32., 40.]
+
+# Separatrix
+SI_SEP_N = 35

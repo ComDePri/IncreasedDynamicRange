@@ -1,0 +1,8 @@
+*.png
+*.pdf
+*.npz
+*.npy
+*.mat
+!data/*.png
+!data/hgf.mat
+!data/data_*/*
