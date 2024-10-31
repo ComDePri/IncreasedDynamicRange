@@ -697,7 +697,7 @@ class SubjectTappingData:
         true_freq = np.zeros_like(self.lags)
         for i, row_axes in enumerate(axes[::-1]):
             i += 2
-            row_axes[0].set_ylabel(f"{int(self.diffs[i])}Hz")
+            row_axes[0].set_ylabel(f"{int(self.diffs[i])}ms step\ndelay interval (ms)")
             for j, ax in enumerate(row_axes):
                 true_freq[:change_idx] = 500 + (((-1) ** j) * (self.diffs[i] / 2))
                 true_freq[change_idx:] = 500 + (((-1) ** (j + 1)) * (self.diffs[i] / 2))
@@ -730,7 +730,7 @@ def plot_change_dynamics_helper(s, group_dynamics, diffs, lags, axes=None, label
     true_freq = np.zeros_like(lags)
     for i, row_axes in enumerate(axes[::-1]):
         i += 2
-        row_axes[0].set_ylabel(f"{int(diffs[i])}Hz")
+        row_axes[0].set_ylabel(f"{int(diffs[i])}ms\ndelay interval (ms)")
         for j, ax in enumerate(row_axes):
             if c is not None:
                 ax.errorbar(lags, group_dynamics_mean[i, j], group_dynamics_std[i, j], None, '-o', ecolor="k",
@@ -772,7 +772,10 @@ def plot_full_data_response_vs_fit(data: TappingData, title=None, c_model=None, 
     for i, row_axes in enumerate(axes[::-1]):
         i += 2
         if ylabel:
-            row_axes[0].set_ylabel(f"{int(data.diffs[i])}Hz")
+            if i==3:
+                row_axes[0].set_ylabel(f"{int(data.diffs[i])}ms\ndelay interval (ms)")
+            else:
+                row_axes[0].set_ylabel(f"{int(data.diffs[i])}ms\n")
         for j, ax in enumerate(row_axes):
             if c_model is not None:
                 ax.errorbar(data.lags, data.group_dynamics_mean[i, j], data.group_dynamics_std[i, j], None, '-o',
